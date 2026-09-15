@@ -13,7 +13,7 @@
 pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。卸载：
+包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会启用编排器所需的沙箱工作流引擎，但不会启用 DSH 独立的面向模型的 workflow 工具。卸载：
 
 ```sh
 pnpm dsh plugin --profile web remove dsh-task-orchestrator

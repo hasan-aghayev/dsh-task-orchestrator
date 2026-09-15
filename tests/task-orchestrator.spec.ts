@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { scoreComplexity } from '../src/index.ts'
 
@@ -12,5 +13,11 @@ describe('DSH Task Orchestrator', () => {
 
   it('keeps the score bounded', () => {
     expect(scoreComplexity('frontend backend test docs review '.repeat(100))).toBeLessThanOrEqual(100)
+  })
+
+  it('enables the workflow engine required by the bundle', () => {
+    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    expect(patch).toContain('id: workflow-ptc')
+    expect(patch).toContain('disabled: false')
   })
 })

@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-orchestrator",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Automatic plan-first role delegation for DeepSeek Harness with dependency-aware workers and final review.",
   "author": {
     "name": "Hasan Aghayev",

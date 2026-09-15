@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 — 2026-09-16
+
+- Enable the sandboxed workflow engine required by the orchestrator when the bundle is mounted in the standard web profile.
+
 ## 1.0.1 — 2026-09-16
 
 - Include the generated runtime role module in the published package so GitHub Release and npm-style tarball installs import correctly.

@@ -13,7 +13,7 @@ Install the public GitHub package into a DSH profile:
 pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Remove it with:
+The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle enables the sandboxed workflow engine required by the orchestrator; it does not enable DSH's separate model-facing workflow tool. Remove it with:
 
 ```sh
 pnpm dsh plugin --profile web remove dsh-task-orchestrator

@@ -1,3 +1,12 @@
 - insert:
     - id: task-orchestrator
       name: dsh-task-orchestrator
+
+# The web profile keeps the workflow engine disabled behind presets. The
+# orchestrator consumes the engine directly, so its bundle owns this narrow
+# service override without exposing the separate model-facing workflow tool.
+- id: workflow-ptc
+  name: '@deepseek-ai/dsh-workflow-ptc'
+  config:
+    provider: spawn
+  disabled: false
