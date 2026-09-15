@@ -54,6 +54,8 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "prepare": "pnpm build",
+    "prepack": "pnpm build",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
