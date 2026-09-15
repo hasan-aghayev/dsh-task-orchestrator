@@ -1,0 +1,3 @@
+- insert:
+    - id: task-orchestrator
+      name: dsh-task-orchestrator

@@ -1,0 +1,84 @@
+{
+  "name": "dsh-task-orchestrator",
+  "version": "1.0.0",
+  "description": "Automatic plan-first role delegation for DeepSeek Harness with dependency-aware workers and final review.",
+  "author": {
+    "name": "Hasan Aghayev",
+    "email": "hasan.agaev@gmail.com",
+    "url": "https://github.com/hasan-aghayev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasan-aghayev/dsh-task-orchestrator.git"
+  },
+  "homepage": "https://github.com/hasan-aghayev/dsh-task-orchestrator#readme",
+  "bugs": {
+    "url": "https://github.com/hasan-aghayev/dsh-task-orchestrator/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "subagent",
+    "workflow",
+    "orchestration"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
+    "@deepseek-ai/dsh-subagent": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
+    "@deepseek-ai/dsh-util-values": ">=0.1.2-alpha.2 <0.2.0",
+    "@deepseek-ai/dsh-workflow": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-subagent": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-util-values": "0.1.2-alpha.2",
+    "@deepseek-ai/dsh-workflow": "0.1.0-rc.8",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.8"
+  }
+}
