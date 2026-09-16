@@ -27,8 +27,8 @@ pnpm dsh plugin --profile web remove dsh-task-orchestrator
 
 1. 父 Orchestrator 提供严格 JSON 计划；如果没有计划，插件创建不启动 Planner 子 Agent 的最小确定性图。
 2. 每个 Worker 只收到明确的 `TASK`、`GOAL`、`RELEVANT CONTEXT`、`CONSTRAINTS`、`KNOWN FACTS`、`FILES / CODE`、`DEPENDENCIES`、`EXPECTED OUTPUT` 和 `DO NOT` 信息包。
-3. Scheduler 只有在依赖完成后才启动角色，并按照上下文档位和活动生成上限组合安全批次。
-4. Worker 返回证据、修改文件、测试、阻塞原因和后续步骤；也可以返回 `NEED_FILE`、`NEED_HISTORY`、`NEED_MORE_CONTEXT`、`NEED_DEPENDENCY`、`NEED_BUDGET` 或 `NEED_TOOL_RESULT`。只有 `NEED_MORE_CONTEXT` 会触发一次有限的上下文升级。
+3. Scheduler 只有在依赖完成后才启动角色，并按照上下文档位和活动生成上限逐个准入；一个角色完成后即可补入下一个合适角色，不必等待同批的慢角色。
+4. Worker 返回证据、修改文件、测试、阻塞原因和后续步骤；也可以返回 `NEED_FILE`、`NEED_HISTORY`、`NEED_MORE_CONTEXT`、`NEED_DEPENDENCY`、`NEED_BUDGET` 或 `NEED_TOOL_RESULT`。传给其他 Worker 或用于上下文升级前，依赖报告会先压缩为有界事实；只有 `NEED_MORE_CONTEXT` 会触发一次有限的上下文升级。
 5. `reviewer` 是普通 Worker 角色，生成最终审核字段，不会创建第七个子 Agent。
 
 支持的角色包括 `researcher`、`architect`、`backend`、`frontend`、`tester`、`documentation` 和 `reviewer`。插件使用 DSH 现有的 subagent 与 workflow 服务，不修改 agent loop。
@@ -62,16 +62,28 @@ config:
   allowParallelWrites: false
   requireReview: true
   maxActiveGenerations: 2
-  hardContextTokens: 65536
+  hardContextTokens: 98304
   priorityAgingMs: 30000
   totalContextTokens: 98304
+  contextCompactionChars: 4096
+  concurrencyByContext:
+    - { maxContextTokens: 8192, maxActiveGenerations: 2 }
+    - { maxContextTokens: 16384, maxActiveGenerations: 2 }
+    - { maxContextTokens: 24576, maxActiveGenerations: 2 }
+    - { maxContextTokens: 32768, maxActiveGenerations: 2 }
+    - { maxContextTokens: 49152, maxActiveGenerations: 2 }
+    - { maxContextTokens: 65536, maxActiveGenerations: 1 }
+    - { maxContextTokens: 81920, maxActiveGenerations: 1 }
+    - { maxContextTokens: 98304, maxActiveGenerations: 1 }
   minimumVramHeadroomGiB: 0.8
   parentOrchestratorOnly: true
 ```
 
 `suggest` 模式总是先返回计划。`off` 会关闭自动规划，但保留显式工具。`auto` 适用于明确允许自动执行的部署。
 
-`maxActiveGenerations` 限制父 Agent 和子 Agent 同时消费的模型流。只有正在消费输出的流占用一个槽位；等待工具或子任务的 Agent 不占用槽位。`priorityAgingMs` 让排队请求在达到设定时间后提升一级优先级，避免 worker 长时间等待。`hardContextTokens` 是分词前的保守检查，精确 token 数仍由 NInfer 决定。`totalContextTokens` 是批次预算，不保证 GPU 可以同时容纳所有请求；`minimumVramHeadroomGiB` 记录部署时的安全目标。
+`maxActiveGenerations` 是部署级上限。`concurrencyByContext` 可以根据请求大小降低上限，因此通过 benchmark 的硬件可以让小 Worker 使用更多并发。当前 RTX 3090 profile 的小上下文档位都设为二，大上下文档位设为一：NInfer 在三个和六个并发的启动内存预留检查中失败，因此 profile 不宣称不安全的并行能力。只有正在消费输出的流占用一个槽位；等待工具或子任务的 Agent 不占用槽位。已完成的流会立即释放其上下文预算，因此排队的 worker 可以在另一个活动 worker 继续运行时补入。父 Orchestrator 从 `preferredWorkers` 开始，并在结果释放容量后逐步准入其他就绪 Worker，最多六个。`contextCompactionChars` 限制升级或传递前的依赖报告大小。`priorityAgingMs` 让排队请求在达到设定时间后提升一级优先级，避免 worker 长时间等待。`hardContextTokens` 是分词前的保守检查，精确 token 数仍由 NInfer 决定。`totalContextTokens` 是活动任务的保守预算，不保证 GPU 可以同时容纳所有请求；`minimumVramHeadroomGiB` 记录部署时的安全目标。
+
+包的默认值是保守的（`maxActiveGenerations: 2`，小请求使用两个槽位）。只有在该硬件完成 benchmark 后，部署 profile 才应提高全局上限并提供相匹配的 `concurrencyByContext` 项。
 
 `task_orchestrate` 工具接受 `objective`、可选父模型 `plan`、可选的 `planOnly`、可选的 `executeWrites` 和可选的 `maxWorkers` 上限。请求级上限不能超过部署级上限。
 
@@ -92,6 +104,8 @@ pnpm build
 - 复杂度检测使用词法信号，可能漏掉简短但困难的请求，也可能把较长的简单请求判为复杂。
 - NInfer 本身不会强制任意 JSON 输出。DSH 会在每次模型响应后验证计划和 Worker 字段，但这不能替代人工审查。
 - 写入范围会传给 Scheduler 和 Worker prompt；文件权限和审批策略仍由外层 DSH profile 负责。
+- 上下文档位为 8K、16K、24K、32K、49K、65K、81K 和 96K。本地 profile 保持 98,304 token 的共享预算，并在 RTX 3090 预留 benchmark 后使用两个流的安全上限；更高的分档并发需要单独的硬件 benchmark。
+- 压缩是确定性且有界的。它保留调度和审查所需的报告字段，但不是语义摘要，也不证明重启后 NInfer 恢复了 KV 缓存。
 
 ## 仓库
 

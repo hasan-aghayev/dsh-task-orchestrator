@@ -27,8 +27,8 @@ The plugin adds the `task_orchestrate` tool and enables the standard DSH delegat
 
 1. The parent orchestrator supplies a strict JSON plan, or the plugin creates a minimal deterministic graph without a planner child.
 2. Each worker receives only an explicit `TASK`, `GOAL`, `RELEVANT CONTEXT`, `CONSTRAINTS`, `KNOWN FACTS`, `FILES / CODE`, `DEPENDENCIES`, `EXPECTED OUTPUT`, and `DO NOT` packet.
-3. The scheduler starts a role only after its dependencies complete. Independent read-only roles are packed into safe batches by context tier and active-generation limits.
-4. Workers return structured evidence, changed files, tests, blockers, next steps, and can request `NEED_FILE`, `NEED_HISTORY`, `NEED_MORE_CONTEXT`, `NEED_DEPENDENCY`, `NEED_BUDGET`, or `NEED_TOOL_RESULT`; only `NEED_MORE_CONTEXT` triggers one bounded context escalation.
+3. The scheduler starts a role only after its dependencies complete. Independent read-only roles are admitted incrementally by context tier and active-generation limits; when one role settles, the next fitting role can start without waiting for its sibling.
+4. Workers return structured evidence, changed files, tests, blockers, next steps, and can request `NEED_FILE`, `NEED_HISTORY`, `NEED_MORE_CONTEXT`, `NEED_DEPENDENCY`, `NEED_BUDGET`, or `NEED_TOOL_RESULT`. Dependency reports are compacted to bounded facts before they are handed to another worker or reused for a context escalation; only `NEED_MORE_CONTEXT` triggers one bounded context escalation.
 5. A task with role `reviewer` is an ordinary worker and produces the final review fields; no seventh child is created.
 
 Supported roles are `researcher`, `architect`, `backend`, `frontend`, `tester`, `documentation`, and `reviewer`. The plugin uses the existing DSH subagent and workflow services and does not modify the agent loop.
@@ -62,16 +62,28 @@ config:
   allowParallelWrites: false
   requireReview: true
   maxActiveGenerations: 2
-  hardContextTokens: 65536
+  hardContextTokens: 98304
   priorityAgingMs: 30000
   totalContextTokens: 98304
+  contextCompactionChars: 4096
+  concurrencyByContext:
+    - { maxContextTokens: 8192, maxActiveGenerations: 2 }
+    - { maxContextTokens: 16384, maxActiveGenerations: 2 }
+    - { maxContextTokens: 24576, maxActiveGenerations: 2 }
+    - { maxContextTokens: 32768, maxActiveGenerations: 2 }
+    - { maxContextTokens: 49152, maxActiveGenerations: 2 }
+    - { maxContextTokens: 65536, maxActiveGenerations: 1 }
+    - { maxContextTokens: 81920, maxActiveGenerations: 1 }
+    - { maxContextTokens: 98304, maxActiveGenerations: 1 }
   minimumVramHeadroomGiB: 0.8
   parentOrchestratorOnly: true
 ```
 
 The `suggest` mode always returns a plan first. `off` disables automatic planning but keeps the explicit tool. `auto` is available for deployments that intentionally permit automatic execution.
 
-`maxActiveGenerations` limits consumed model streams across the parent and children. A stream holds a lane only while its output is consumed; an agent waiting for tools or children does not hold one. `priorityAgingMs` raises a waiting request by one priority level after the configured interval, so a long-running worker cannot wait forever. `hardContextTokens` is a conservative pre-tokenization guard; NInfer remains authoritative for exact token counts. `totalContextTokens` is a conservative batch budget, not a promise that requests fit concurrently in GPU memory. `minimumVramHeadroomGiB` documents the safety target used when selecting a deployment profile.
+`maxActiveGenerations` is the deployment ceiling. `concurrencyByContext` can lower it for large requests, so a small worker may use more lanes on hardware that passes the corresponding benchmark. On the current RTX 3090 profile every small-worker tier is intentionally set to two and the larger tiers to one: NInfer failed its startup memory reservation at three and six, so the profile does not claim unsafe parallelism. A stream holds a lane only while its output is consumed; an agent waiting for tools or children does not hold one. Completed streams release their context budget immediately, so a queued worker can replace them while another active worker continues. The parent orchestrator starts with `preferredWorkers`, then admits additional ready workers as results free capacity, up to six. `contextCompactionChars` bounds dependency reports before escalation or handoff. `priorityAgingMs` raises a waiting request by one priority level after the configured interval, so a long-running worker cannot wait forever. `hardContextTokens` is a conservative pre-tokenization guard; NInfer remains authoritative for exact token counts. `totalContextTokens` is a conservative active-work budget, not a promise that requests fit concurrently in GPU memory. `minimumVramHeadroomGiB` documents the safety target used when selecting a deployment profile.
+
+The package defaults are conservative (`maxActiveGenerations: 2` and two lanes for small requests). To test higher small-worker concurrency, raise the global ceiling and provide matching `concurrencyByContext` entries in the deployment profile only after a benchmark on that hardware.
 
 The `task_orchestrate` tool accepts `objective`, optional parent-created `plan`, optional `planOnly`, optional `executeWrites`, and an optional `maxWorkers` cap. A request-side cap can never exceed the configured deployment ceiling.
 
@@ -92,6 +104,8 @@ The package emits JavaScript to `lib/` and declaration files to `lib/types/`. Th
 - Complexity detection uses lexical signals and may miss a short difficult request or classify a long simple request as complex.
 - NInfer does not force arbitrary JSON output by itself. DSH validates plan and worker fields after each model response, but that validation does not replace human review.
 - Write scopes are declared to the scheduler and worker prompts; the surrounding DSH profile remains responsible for filesystem permissions and approval policy.
+- Context tiers are 8K, 16K, 24K, 32K, 49K, 65K, 81K and 96K. The local profile keeps the shared budget at 98,304 tokens and applies a two-stream safety ceiling after the RTX 3090 reservation benchmark; higher per-tier concurrency values require a separate hardware benchmark.
+- Compaction is deterministic and bounded. It preserves the report fields needed for scheduling and review, but it is not a semantic summary and does not prove that NInfer restored a KV cache after a restart.
 
 ## Repository
 

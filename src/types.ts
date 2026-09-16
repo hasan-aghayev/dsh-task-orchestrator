@@ -31,7 +31,7 @@ export interface PlannedTask {
   readOnly: boolean
   writeScopes: string[]
   /** Context tier selected by the parent orchestrator. */
-  contextBudget?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536
+  contextBudget?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536 | 81920 | 98304
   /** Reserved output tokens used during admission. */
   outputReserveTokens?: number
   /** Additional safety reserve used during admission. */
@@ -57,7 +57,7 @@ export interface TaskPackage {
 export interface WorkerNeed {
   kind: 'NEED_FILE' | 'NEED_HISTORY' | 'NEED_MORE_CONTEXT' | 'NEED_DEPENDENCY' | 'NEED_BUDGET' | 'NEED_TOOL_RESULT' | 'NEED_MORE_TOOL' | 'NEED_REVIEW'
   reason: string
-  requestedContextTokens?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536
+  requestedContextTokens?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536 | 81920 | 98304
 }
 
 /** Durable state snapshot for one logical task. */

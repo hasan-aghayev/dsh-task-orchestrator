@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
-import { scoreComplexity } from '../src/index.ts'
+import { Config, scoreComplexity } from '../src/index.ts'
 import { ResourceManager, estimateInputTokens } from '../src/resource-manager.ts'
 import { CONTEXT_TIERS, buildAdaptivePlan, estimateTaskBudget, packReadyTasks, selectContextTier } from '../src/adaptive.ts'
 import { createOrchestrationScript } from '../src/orchestration-script.ts'
@@ -19,10 +19,17 @@ describe('DSH Task Orchestrator', () => {
     expect(scoreComplexity('frontend backend test docs review '.repeat(100))).toBeLessThanOrEqual(100)
   })
 
-  it('selects the smallest supported context tier and rejects an over-limit request', () => {
+  it('keeps default context concurrency within the default global ceiling', () => {
+    const defaults = Config({})
+    expect(defaults.maxActiveGenerations).toBe(2)
+    expect(defaults.concurrencyByContext?.every(tier => tier.maxActiveGenerations <= (defaults.maxActiveGenerations ?? 0))).toBe(true)
+  })
+
+  it('selects the smallest supported context tier through the 96K ceiling', () => {
     expect(selectContextTier(8_193)).toBe(16_384)
-    expect(selectContextTier(65_537)).toBeUndefined()
-    expect(CONTEXT_TIERS).toEqual([8_192, 16_384, 24_576, 32_768, 49_152, 65_536])
+    expect(selectContextTier(65_537)).toBe(81_920)
+    expect(selectContextTier(98_305)).toBeUndefined()
+    expect(CONTEXT_TIERS).toEqual([8_192, 16_384, 24_576, 32_768, 49_152, 65_536, 81_920, 98_304])
   })
 
   it('packs only the largest safe ready tasks into the available generation budget', () => {
@@ -38,7 +45,7 @@ describe('DSH Task Orchestrator', () => {
 
   it('builds a minimal parent plan with a reviewer inside the worker ceiling', () => {
     const plan = buildAdaptivePlan('Исследуй API, добавь тесты и документацию.', 3, 6, true)
-    expect(plan.tasks.length).toBe(4)
+    expect(plan.tasks.length).toBe(5)
     expect(plan.tasks.at(-1)?.role).toBe('reviewer')
     expect(plan.tasks.at(-1)?.dependsOn).toEqual(plan.tasks.slice(0, -1).map(task => task.id))
     expect(plan.tasks.every(task => task.taskPackage?.taskId === task.id)).toBe(true)
@@ -77,6 +84,156 @@ describe('DSH Task Orchestrator', () => {
     expect(peak).toBe(2)
     expect(manager.activeGenerations).toBe(0)
     expect(manager.queuedGenerations).toBe(0)
+  })
+
+  it('raises concurrency for small requests while preserving the shared budget', async () => {
+    const manager = new ResourceManager({
+      maxActiveGenerations: 6,
+      hardContextTokens: 8_192,
+      totalContextTokens: 10_000,
+      concurrencyByContext: [{ maxContextTokens: 8_192, maxActiveGenerations: 6 }],
+    })
+    const context = { agents: { get: () => undefined } } as never
+    let active = 0
+    let peak = 0
+    const stream = () => (async function* () {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      active -= 1
+    })()
+    const requests = Array.from({ length: 6 }, () => manager.stream(context, { provider: 'test', model: 'test', messages: [] }, stream))
+    await Promise.all(requests.map(async request => { for await (const _chunk of request) { /* consume */ } }))
+    expect(peak).toBe(6)
+    expect(manager.activeGenerations).toBe(0)
+    expect(manager.activeContextBudget).toBe(0)
+  })
+
+  it('refills a free worker slot before the slow sibling settles', async () => {
+    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
+    const tasks = ['one', 'two', 'three', 'four'].map((id) => ({
+      id,
+      title: id,
+      role: 'researcher' as const,
+      prompt: id,
+      dependsOn: [],
+      readOnly: true,
+      writeScopes: [],
+      contextBudget: 8_192 as const,
+      outputReserveTokens: 0,
+      safetyReserveTokens: 0,
+      taskPackage: { taskId: id, goal: id, relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: id, doNot: [] },
+    }))
+    const started = new Map<string, number>()
+    const finished = new Map<string, number>()
+    const context = {
+      args: { objective: 'Run independent checks.', planOnly: false, allowWrites: false, allowParallelWrites: false, maxWorkers: 6, maxConcurrentAgents: 2, maxHandoffChars: 16_384, totalContextTokens: 98_304, plan: { summary: 'Dynamic queue.', risk: 'low', requiresConfirmation: false, tasks } },
+      phase: (): void => undefined,
+      parallel: async (): Promise<never> => { throw new Error('legacy batch parallelism was used') },
+      agent: async (_prompt: string, options: { label: string }): Promise<unknown> => {
+        const id = options.label.split(': ').at(-1) as string
+        started.set(id, Date.now())
+        const delay = id === 'one' ? 20 : id === 'two' ? 100 : 5
+        await new Promise<void>((resolve) => setTimeout(resolve, delay))
+        finished.set(id, Date.now())
+        return { taskId: id, status: 'completed', summary: id, evidence: [], changedFiles: [], tests: [], blockers: [], nextSteps: [] }
+      },
+      setTimeout,
+    }
+    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string; agentsStarted: number; workers: Array<{ status: string }> }>
+    expect(result.status).toBe('completed')
+    expect(result.agentsStarted).toBe(4)
+    expect(result.workers).toHaveLength(4)
+    expect(started.get('three')).toBeLessThan(finished.get('two') ?? Number.POSITIVE_INFINITY)
+  })
+
+  it('starts with the preferred workers and expands a small-context plan after results', async () => {
+    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
+    const tasks = Array.from({ length: 6 }, (_, index) => {
+      const id = `worker-${index + 1}`
+      return {
+        id,
+        title: id,
+        role: 'researcher' as const,
+        prompt: id,
+        dependsOn: [],
+        readOnly: true,
+        writeScopes: [],
+        contextBudget: 8_192 as const,
+        outputReserveTokens: 0,
+        safetyReserveTokens: 0,
+        taskPackage: { taskId: id, goal: id, relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: id, doNot: [] },
+      }
+    })
+    const started: string[] = []
+    let active = 0
+    let peak = 0
+    const context = {
+      args: {
+        objective: 'Run independent checks.',
+        planOnly: false,
+        allowWrites: false,
+        allowParallelWrites: false,
+        preferredWorkers: 2,
+        maxWorkers: 6,
+        maxConcurrentAgents: 6,
+        concurrencyByContext: [{ maxContextTokens: 8_192, maxActiveGenerations: 6 }],
+        contextCompactionChars: 512,
+        maxHandoffChars: 16_384,
+        totalContextTokens: 98_304,
+        plan: { summary: 'Dynamic queue.', risk: 'low', requiresConfirmation: false, tasks },
+      },
+      phase: (): void => undefined,
+      agent: async (_prompt: string, options: { label: string }): Promise<unknown> => {
+        const id = options.label.split(': ').at(-1) as string
+        started.push(id)
+        active += 1
+        peak = Math.max(peak, active)
+        await new Promise<void>(resolve => setTimeout(resolve, id === 'worker-1' || id === 'worker-2' ? 10 : 30))
+        active -= 1
+        return { taskId: id, status: 'completed', summary: id, evidence: [], changedFiles: [], tests: [], blockers: [], nextSteps: [] }
+      },
+    }
+    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string; agentsStarted: number; workers: Array<{ status: string }> }>
+    expect(result.status).toBe('completed')
+    expect(result.agentsStarted).toBe(6)
+    expect(result.workers).toHaveLength(6)
+    expect(started.slice(0, 2)).toEqual(['worker-1', 'worker-2'])
+    expect(peak).toBeGreaterThan(2)
+  })
+
+  it('compacts dependency reports before handing them to a later worker', async () => {
+    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
+    const tasks = [
+      {
+        id: 'source', title: 'source', role: 'researcher' as const, prompt: 'source', dependsOn: [], readOnly: true, writeScopes: [], contextBudget: 8_192 as const, outputReserveTokens: 0, safetyReserveTokens: 0,
+        taskPackage: { taskId: 'source', goal: 'source', relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: 'source', doNot: [] },
+      },
+      {
+        id: 'consumer', title: 'consumer', role: 'tester' as const, prompt: 'consumer', dependsOn: ['source'], readOnly: true, writeScopes: [], contextBudget: 8_192 as const, outputReserveTokens: 0, safetyReserveTokens: 0,
+        taskPackage: { taskId: 'consumer', goal: 'consumer', relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: ['source'], expectedOutput: 'consumer', doNot: [] },
+      },
+    ]
+    let consumerPrompt = ''
+    const context = {
+      args: {
+        objective: 'Run dependent checks.', planOnly: false, allowWrites: false, allowParallelWrites: false,
+        preferredWorkers: 2, maxWorkers: 2, maxConcurrentAgents: 2, contextCompactionChars: 512,
+        maxHandoffChars: 16_384, totalContextTokens: 98_304,
+        plan: { summary: 'Compaction.', risk: 'low', requiresConfirmation: false, tasks },
+      },
+      phase: (): void => undefined,
+      agent: async (prompt: string, options: { label: string }): Promise<unknown> => {
+        const id = options.label.split(': ').at(-1) as string
+        if (id === 'consumer') consumerPrompt = prompt
+        return { taskId: id, status: 'completed', summary: id, evidence: [id === 'source' ? 'x'.repeat(5_000) : 'ok'], changedFiles: [], tests: [], blockers: [], nextSteps: [] }
+      },
+    }
+    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string }>
+    expect(result.status).toBe('completed')
+    expect(consumerPrompt).toContain('[compacted]')
+    expect(consumerPrompt.length).toBeLessThan(4_000)
   })
 
   it('removes an aborted request that is waiting for a lane', async () => {

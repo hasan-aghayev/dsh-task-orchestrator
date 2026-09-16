@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.6 — 2026-09-17
+
+- Add worker context tiers through 81,920 and 98,304 tokens while keeping the local profile's shared budget at 98,304.
+- Admit the preferred number of workers first, then expand the ready set as completed workers release context and model capacity, up to six workers.
+- Add per-context concurrency limits and deterministic dependency-report compaction before handoff or context escalation.
+- Record the RTX 3090 result honestly: NInfer starts reliably with two active generations, while three- and six-generation startup reservations exceed available runtime memory; the local profile therefore remains capped at two.
+- Update the paired READMEs and launcher-facing configuration guidance to match the active profile.
+
 ## 1.0.5 — 2026-09-16
 
 - Bound NInfer model streams to a configurable two-request queue with priority aging, cancellation, and a conservative context-size guard.

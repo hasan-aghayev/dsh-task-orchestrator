@@ -36,6 +36,23 @@ export const inject = ['tools', 'workflowEngine', 'subagents', 'systemPrompt', '
 /** Automatic orchestration mode. */
 export type OrchestrationMode = 'off' | 'suggest' | 'hybrid' | 'auto'
 
+/** Maximum active model streams allowed for requests up to one context size. */
+export interface ContextConcurrency {
+  maxContextTokens: number
+  maxActiveGenerations: number
+}
+
+const DEFAULT_CONTEXT_CONCURRENCY: readonly ContextConcurrency[] = [
+  { maxContextTokens: 8_192, maxActiveGenerations: 2 },
+  { maxContextTokens: 16_384, maxActiveGenerations: 2 },
+  { maxContextTokens: 24_576, maxActiveGenerations: 2 },
+  { maxContextTokens: 32_768, maxActiveGenerations: 2 },
+  { maxContextTokens: 49_152, maxActiveGenerations: 2 },
+  { maxContextTokens: 65_536, maxActiveGenerations: 1 },
+  { maxContextTokens: 81_920, maxActiveGenerations: 1 },
+  { maxContextTokens: 98_304, maxActiveGenerations: 1 },
+]
+
 /** Deployment policy for automatic task orchestration. */
 export interface Config {
   /** Disable automation, show a plan first, or execute complex requests automatically. */
@@ -66,6 +83,8 @@ export interface Config {
   maxResultChars?: number
   /** Maximum model streams consumed at once by the local NInfer service. */
   maxActiveGenerations?: number
+  /** Per-request concurrency ceilings selected by estimated input context. */
+  concurrencyByContext?: ContextConcurrency[]
   /** Hard estimated input-token limit for one model request. */
   hardContextTokens?: number
   /** Queue wait interval after which a request gains one priority level. */
@@ -74,6 +93,8 @@ export interface Config {
   totalContextTokens?: number
   /** Minimum free VRAM in GiB required before a multi-worker batch is admitted. */
   minimumVramHeadroomGiB?: number
+  /** Maximum characters retained when a worker report is compacted for another task. */
+  contextCompactionChars?: number
   /** Keep the parent as the only planner; no separate planner child is created. */
   parentOrchestratorOnly?: boolean
 }
@@ -94,10 +115,15 @@ export const Config: z<Config> = z.object({
   maxHandoffChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(16_384),
   maxResultChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(16_384),
   maxActiveGenerations: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(2),
+  concurrencyByContext: z.array(z.object({
+    maxContextTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+    maxActiveGenerations: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
+  })).default([...DEFAULT_CONTEXT_CONCURRENCY]),
   hardContextTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(65_536),
   priorityAgingMs: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(30_000),
   totalContextTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(98_304),
   minimumVramHeadroomGiB: z.number().min(0).max(24).default(0.8),
+  contextCompactionChars: z.number().step(1).min(128).max(Number.MAX_SAFE_INTEGER).default(4_096),
   parentOrchestratorOnly: z.boolean().default(true),
 })
 
@@ -116,10 +142,12 @@ interface ResolvedConfig {
   readonly maxHandoffChars: number
   readonly maxResultChars: number
   readonly maxActiveGenerations: number
+  readonly concurrencyByContext: readonly ContextConcurrency[]
   readonly hardContextTokens: number
   readonly priorityAgingMs: number
   readonly totalContextTokens: number
   readonly minimumVramHeadroomGiB: number
+  readonly contextCompactionChars: number
   readonly parentOrchestratorOnly: boolean
 }
 
@@ -130,6 +158,7 @@ interface OrchestrationArgs {
   preferredWorkers: number
   maxWorkers: number
   maxConcurrentAgents: number
+  concurrencyByContext: readonly ContextConcurrency[]
   maxHandoffChars: number
   allowWrites: boolean
   allowParallelWrites: boolean
@@ -138,6 +167,7 @@ interface OrchestrationArgs {
   subagentModel?: string
   plan: TaskPlan
   totalContextTokens: number
+  contextCompactionChars: number
   minimumVramHeadroomGiB: number
   parentOrchestratorOnly: boolean
 }
@@ -354,16 +384,18 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxHandoffChars = config.maxHandoffChars ?? 16_384
   const maxResultChars = config.maxResultChars ?? 16_384
   const maxActiveGenerations = config.maxActiveGenerations ?? 2
+  const concurrencyByContext = config.concurrencyByContext ?? [...DEFAULT_CONTEXT_CONCURRENCY]
   const hardContextTokens = config.hardContextTokens ?? 65_536
   const priorityAgingMs = config.priorityAgingMs ?? 30_000
   const totalContextTokens = config.totalContextTokens ?? 98_304
   const minimumVramHeadroomGiB = config.minimumVramHeadroomGiB ?? 0.8
+  const contextCompactionChars = config.contextCompactionChars ?? 4_096
   const parentOrchestratorOnly = config.parentOrchestratorOnly ?? true
   if (!['off', 'suggest', 'hybrid', 'auto'].includes(mode)) throw new TypeError(`unknown orchestration mode: ${mode}`)
   if (!Number.isSafeInteger(minComplexityScore) || minComplexityScore < 1) throw new TypeError('minComplexityScore must be a positive safe integer')
   if (subagentProvider.length === 0 || subagentProvider !== subagentProvider.trim()) throw new TypeError('subagentProvider must be a non-empty normalized string')
   if (subagentModel !== undefined && (subagentModel.length === 0 || subagentModel !== subagentModel.trim())) throw new TypeError('subagentModel must be a non-empty normalized string when provided')
-  const limits = { preferredWorkers, maxWorkers, maxTotalAgents, maxConcurrentAgents, maxHandoffChars, maxResultChars, maxActiveGenerations, hardContextTokens, priorityAgingMs, totalContextTokens }
+  const limits = { preferredWorkers, maxWorkers, maxTotalAgents, maxConcurrentAgents, maxHandoffChars, maxResultChars, maxActiveGenerations, hardContextTokens, priorityAgingMs, totalContextTokens, contextCompactionChars }
   for (const [label, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${label} must be a positive safe integer`)
   }
@@ -371,7 +403,15 @@ function resolveConfig(config: Config): ResolvedConfig {
   if (maxWorkers > 6) throw new TypeError('maxWorkers cannot exceed six workers')
   if (maxTotalAgents > 6) throw new TypeError('maxTotalAgents cannot exceed six workers')
   if (maxTotalAgents < 1) throw new TypeError('maxTotalAgents must allow one worker')
-  if (maxConcurrentAgents > maxWorkers) throw new TypeError('maxConcurrentAgents cannot exceed maxWorkers')
+  if (maxConcurrentAgents > maxWorkers || maxConcurrentAgents > 6) throw new TypeError('maxConcurrentAgents cannot exceed six workers')
+  if (maxActiveGenerations > 6) throw new TypeError('maxActiveGenerations cannot exceed six model streams')
+  let previousContext = 0
+  for (const tier of concurrencyByContext) {
+    if (!Number.isSafeInteger(tier.maxContextTokens) || tier.maxContextTokens <= previousContext) throw new TypeError('concurrencyByContext must be sorted by increasing maxContextTokens')
+    if (!Number.isSafeInteger(tier.maxActiveGenerations) || tier.maxActiveGenerations < 1 || tier.maxActiveGenerations > maxActiveGenerations) throw new TypeError('concurrencyByContext has an invalid maxActiveGenerations value')
+    previousContext = tier.maxContextTokens
+  }
+  if (concurrencyByContext.length === 0 || previousContext < hardContextTokens) throw new TypeError('concurrencyByContext must cover hardContextTokens')
   if (!Number.isFinite(minimumVramHeadroomGiB) || minimumVramHeadroomGiB < 0) throw new TypeError('minimumVramHeadroomGiB must be a non-negative finite number')
   return {
     mode,
@@ -388,10 +428,12 @@ function resolveConfig(config: Config): ResolvedConfig {
     maxHandoffChars,
     maxResultChars,
     maxActiveGenerations,
+    concurrencyByContext,
     hardContextTokens,
     priorityAgingMs,
     totalContextTokens,
     minimumVramHeadroomGiB,
+    contextCompactionChars,
     parentOrchestratorOnly,
   }
 }
@@ -556,6 +598,7 @@ async function startOrchestration(
     preferredWorkers,
     maxWorkers: workerCap,
     maxConcurrentAgents: resolved.maxConcurrentAgents,
+    concurrencyByContext: resolved.concurrencyByContext,
     maxHandoffChars: resolved.maxHandoffChars,
     allowWrites,
     allowParallelWrites: resolved.allowParallelWrites,
@@ -564,6 +607,7 @@ async function startOrchestration(
     ...(resolved.subagentModel === undefined ? {} : { subagentModel: resolved.subagentModel }),
     plan,
     totalContextTokens: resolved.totalContextTokens,
+    contextCompactionChars: resolved.contextCompactionChars,
     minimumVramHeadroomGiB: resolved.minimumVramHeadroomGiB,
     parentOrchestratorOnly: resolved.parentOrchestratorOnly,
   }
@@ -615,6 +659,8 @@ export function apply(ctx: Context, config: Config): void {
   const resources = new ResourceManager({
     maxActiveGenerations: resolved.maxActiveGenerations,
     hardContextTokens: resolved.hardContextTokens,
+    totalContextTokens: resolved.totalContextTokens,
+    concurrencyByContext: resolved.concurrencyByContext,
     priorityAgingMs: resolved.priorityAgingMs,
   })
   void requireStructuredProvider(ctx, resolved.subagentProvider)

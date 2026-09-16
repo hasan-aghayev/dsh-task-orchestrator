@@ -9,7 +9,7 @@
 import type { PlannedTask, TaskPlan, TaskRole } from './types.js'
 
 /** Context budgets offered to a worker. The value is a logical ceiling. */
-export const CONTEXT_TIERS = [8_192, 16_384, 24_576, 32_768, 49_152, 65_536] as const
+export const CONTEXT_TIERS = [8_192, 16_384, 24_576, 32_768, 49_152, 65_536, 81_920, 98_304] as const
 
 /** A supported worker context budget. */
 export type ContextTier = (typeof CONTEXT_TIERS)[number]
@@ -63,7 +63,7 @@ export interface PackingPolicy {
 }
 
 /** Choose the smallest supported tier that can hold a request. */
-export function selectContextTier(requestedTokens: number, hardLimit: number = 65_536): ContextTier | undefined {
+export function selectContextTier(requestedTokens: number, hardLimit: number = 98_304): ContextTier | undefined {
   if (!Number.isSafeInteger(requestedTokens) || requestedTokens < 1) throw new TypeError('requestedTokens must be a positive safe integer')
   if (!Number.isSafeInteger(hardLimit) || hardLimit < 1) throw new TypeError('hardLimit must be a positive safe integer')
   return CONTEXT_TIERS.find(tier => tier >= requestedTokens && tier <= hardLimit)
@@ -143,8 +143,10 @@ export function buildAdaptivePlan(objective: string, preferredWorkers: number, m
   if (!Number.isSafeInteger(preferredWorkers) || preferredWorkers < 1) throw new TypeError('preferredWorkers must be a positive safe integer')
   if (!Number.isSafeInteger(maxWorkers) || maxWorkers < 1 || preferredWorkers > maxWorkers) throw new TypeError('maxWorkers must be a positive safe integer at least preferredWorkers')
   const requestedRoles = roleForObjective(objective)
-  const roleLimit = Math.min(maxWorkers, Math.max(1, preferredWorkers))
-  const roles = requestedRoles.slice(0, roleLimit)
+  // Keep the full candidate graph so the execution script can start with the
+  // preferred count and admit additional roles after earlier results settle.
+  // The preference controls admission, not graph construction.
+  const roles = requestedRoles.slice(0, maxWorkers)
   const tasks: PlannedTask[] = roles.map((role, index) => ({
     id: `worker-${index + 1}`,
     title: `${role} pass`,
