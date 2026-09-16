@@ -156,7 +156,7 @@ git diff --check: PASS.
 
 Browser smoke: PASS через реальный профиль после перезапуска DSH. Видимый результат — `plan-only`, `agentsStarted: 0`, граф с researcher/backend/reviewer, явными зависимостями и пустыми `writeScopes`; рабочая папка не изменялась.
 
-Runtime smoke: `/health` возвращает `{"status":"ok"}`; DSH и NInfer оставлены запущенными. Предупреждение `lingshu-bridge: spawn python ENOENT` сохраняется как отдельная предсуществующая проблема и к этому изменению не относится.
+Runtime smoke: `/health` возвращает `{"status":"ok"}`; DSH и NInfer оставлены запущенными. Отдельное предупреждение `lingshu-bridge: spawn python ENOENT` устранено в профиле `web-multiagent-3090`: конфигурация `furongjun1999-dsh-memory` теперь явно использует существующий `/usr/bin/python3`. После перезапуска фактически запущен `/usr/bin/python3 -m md_cg.mcp_server`; новые ошибки `spawn python ENOENT` не появляются. Исходный patch профиля сохранён в `/home/diffusionlab/backups/dynamic-workers-3090-lingshu-20260916T123000Z/cordis.patch.yml.before`.
 
 # ROLLBACK
 
