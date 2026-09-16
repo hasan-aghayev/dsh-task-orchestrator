@@ -2,9 +2,29 @@
     - id: task-orchestrator
       name: dsh-task-orchestrator
 
-# The web profile keeps the workflow engine disabled behind presets. The
-# orchestrator consumes the engine directly, so its bundle owns this narrow
-# service override without exposing the separate model-facing workflow tool.
+# The web profile keeps delegation and workflow tools disabled by default. This
+# bundle owns the complete delegation surface used by the orchestrator and by
+# explicit model requests: spawn, fork, and continuable-child controls.
+- id: tool-subagent-control
+  disabled: false
+
+- id: tool-subagent-list-agents
+  disabled: false
+
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+  disabled: false
+
+- id: tool-subagent-fork
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: one-shot
+  disabled: false
+
 - id: workflow-ptc
   name: '@deepseek-ai/dsh-workflow-ptc'
   config:

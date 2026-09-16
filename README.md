@@ -13,7 +13,7 @@ Install the public GitHub package into a DSH profile:
 pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle enables the sandboxed workflow engine required by the orchestrator; it does not enable DSH's separate model-facing workflow tool. Remove it with:
+The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle enables the workflow engine and the model-facing delegation surface: `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents`. It does not enable DSH's separate model-facing `workflow` tool. Remove it with:
 
 ```sh
 pnpm dsh plugin --profile web remove dsh-task-orchestrator
@@ -23,7 +23,7 @@ Restart the profile after installation if it is already running.
 
 ## What it does
 
-The plugin adds the `task_orchestrate` tool and an automatic first-step planner. A simple request stays on the normal path. A complex request is scored with a deterministic detector and then sent through these stages:
+The plugin adds the `task_orchestrate` tool, enables the standard DSH delegation tools, and adds an automatic first-step planner. A simple request stays on the normal path. A complex request is scored with a deterministic detector and then sent through these stages:
 
 1. A planner returns a strict JSON plan with a summary, risk, roles, dependencies, read-only status, and declared write scopes.
 2. The scheduler starts a role only after its dependencies complete. Independent read-only roles may run in bounded parallel batches.
@@ -31,6 +31,8 @@ The plugin adds the `task_orchestrate` tool and an automatic first-step planner.
 4. A final reviewer compares the reports with the current workspace and returns `approved`, `changes_requested`, `blocked`, or `failed`.
 
 Supported roles are `researcher`, `architect`, `backend`, `frontend`, `tester`, and `documentation`. The plugin uses the existing DSH subagent and workflow services and does not modify the agent loop.
+
+The model can also call `subagent` for a fresh child, `subagent_fork` for a child that inherits completed parent turns, and `list_agents`, `send_message`, or `interrupt_agent` to manage continuable children. These tools are enabled by the bundle because the standard web profile disables them by default.
 
 ## Safe defaults
 

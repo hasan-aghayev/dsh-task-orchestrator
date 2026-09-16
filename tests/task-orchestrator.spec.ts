@@ -20,4 +20,14 @@ describe('DSH Task Orchestrator', () => {
     expect(patch).toContain('id: workflow-ptc')
     expect(patch).toContain('disabled: false')
   })
+
+  it('enables the model-facing delegation tools required by the web profile', () => {
+    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    for (const id of ['tool-subagent-control', 'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork']) {
+      expect(patch).toContain(`- id: ${id}`)
+    }
+    expect(patch).toContain('toolName: subagent')
+    expect(patch).toContain('toolName: subagent_fork')
+    expect(patch.match(/disabled: false/g)?.length).toBeGreaterThanOrEqual(5)
+  })
 })

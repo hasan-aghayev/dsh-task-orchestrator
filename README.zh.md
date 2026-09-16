@@ -13,7 +13,7 @@
 pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会启用编排器所需的沙箱工作流引擎，但不会启用 DSH 独立的面向模型的 workflow 工具。卸载：
+包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会启用工作流引擎以及面向模型的委派工具：`subagent`、`subagent_fork`、`send_message`、`interrupt_agent` 和 `list_agents`。它不会启用 DSH 独立的面向模型的 `workflow` 工具。卸载：
 
 ```sh
 pnpm dsh plugin --profile web remove dsh-task-orchestrator
@@ -23,7 +23,7 @@ pnpm dsh plugin --profile web remove dsh-task-orchestrator
 
 ## 功能
 
-插件增加 `task_orchestrate` 工具以及自动的第一步 Planner。简单请求继续使用普通流程。复杂请求会通过确定性的检测器评分，然后经过以下阶段：
+插件增加 `task_orchestrate` 工具、启用标准 DSH 委派工具，并增加自动的第一步 Planner。简单请求继续使用普通流程。复杂请求会通过确定性的检测器评分，然后经过以下阶段：
 
 1. Planner 返回严格 JSON 计划，其中包含摘要、风险、角色、依赖、只读状态和声明的写入范围。
 2. Scheduler 只有在依赖完成后才启动角色。互不依赖的只读角色可以在有上限的批次中并行运行。
@@ -31,6 +31,8 @@ pnpm dsh plugin --profile web remove dsh-task-orchestrator
 4. 最终 Reviewer 将报告与当前工作区对照，并返回 `approved`、`changes_requested`、`blocked` 或 `failed`。
 
 支持的角色包括 `researcher`、`architect`、`backend`、`frontend`、`tester` 和 `documentation`。插件使用 DSH 现有的 subagent 与 workflow 服务，不修改 agent loop。
+
+模型还可以调用 `subagent` 创建新的子 Agent，调用 `subagent_fork` 继承父 Agent 已完成的轮次，并使用 `list_agents`、`send_message` 或 `interrupt_agent` 管理可继续的子 Agent。由于标准 web profile 默认关闭这些工具，组合包会显式启用它们。
 
 ## 安全默认值
 

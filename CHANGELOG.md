@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 — 2026-09-16
+
+- Enable the standard model-facing `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents` tools in profiles that install this bundle.
+- Document the delegation tools and add coverage for the bundle's enabled tool rows.
+
 ## 1.0.2 — 2026-09-16
 
 - Enable the sandboxed workflow engine required by the orchestrator when the bundle is mounted in the standard web profile.
