@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased — 2026-09-16
+## 1.0.5 — 2026-09-16
 
 - Bound NInfer model streams to a configurable two-request queue with priority aging, cancellation, and a conservative context-size guard.
 - Make the parent orchestrator the only planner, add adaptive context tiers, bounded batch packing, worker `NEED_MORE_CONTEXT` escalation, and a six-worker ceiling with reviewer-as-worker semantics.
 - Set the dynamic-worker profile defaults to six execution slots, two active generations, and a six-worker total ceiling.
 - Add the reproducible RTX 3090 benchmark helper, measured candidate summary, and the approved implementation plan.
+- Fix task-budget calculation so a missing reserve value cannot turn the worker budget into `NaN` and reject every worker.
+- Clamp the preferred worker count to the effective request and deployment ceiling, including explicit one-worker runs.
 
 ## 1.0.4 — 2026-09-16
 

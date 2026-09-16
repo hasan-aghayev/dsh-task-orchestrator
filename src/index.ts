@@ -547,12 +547,13 @@ async function startOrchestration(
   const deploymentWorkerCeiling = Math.min(resolved.maxWorkers, resolved.maxTotalAgents)
   const workerCap = resolveWorkerCap(options.maxWorkers, deploymentWorkerCeiling)
   const allowWrites = resolved.allowWrites || options.executeWrites
-  const plan = options.plan ?? buildAdaptivePlan(options.objective, options.preferredWorkers ?? resolved.preferredWorkers, workerCap, resolved.requireReview)
+  const preferredWorkers = Math.min(options.preferredWorkers ?? resolved.preferredWorkers, workerCap)
+  const plan = options.plan ?? buildAdaptivePlan(options.objective, preferredWorkers, workerCap, resolved.requireReview)
   const args: OrchestrationArgs = {
     objective: options.objective,
     planOnly: options.planOnly,
     executeWrites: options.executeWrites,
-    preferredWorkers: options.preferredWorkers ?? resolved.preferredWorkers,
+    preferredWorkers,
     maxWorkers: workerCap,
     maxConcurrentAgents: resolved.maxConcurrentAgents,
     maxHandoffChars: resolved.maxHandoffChars,

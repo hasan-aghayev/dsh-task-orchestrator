@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-orchestrator",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Adaptive parent-orchestrator role delegation for DeepSeek Harness with dependency-aware workers and optional review.",
   "author": {
     "name": "Hasan Aghayev",

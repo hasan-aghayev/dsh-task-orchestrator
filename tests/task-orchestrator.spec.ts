@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { scoreComplexity } from '../src/index.ts'
 import { ResourceManager, estimateInputTokens } from '../src/resource-manager.ts'
 import { CONTEXT_TIERS, buildAdaptivePlan, estimateTaskBudget, packReadyTasks, selectContextTier } from '../src/adaptive.ts'
+import { createOrchestrationScript } from '../src/orchestration-script.ts'
 
 describe('DSH Task Orchestrator', () => {
   it('does not delegate a short, single-purpose request', () => {
@@ -130,5 +132,66 @@ describe('DSH Task Orchestrator', () => {
     for (const id of ['tool-subagent-control', 'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork', 'workflow-ptc', 'tool-workflow']) {
       expect(patch).toContain(`- id: ${id}\n  disabled: true`)
     }
+  })
+
+  it('admits a worker in the workflow script with the configured batch budget', async () => {
+    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
+    const context = {
+      args: {
+        objective: 'Read the plugin package manifest.',
+        planOnly: false,
+        allowWrites: false,
+        allowParallelWrites: false,
+        maxWorkers: 1,
+        maxConcurrentAgents: 2,
+        maxHandoffChars: 16_384,
+        totalContextTokens: 98_304,
+        plan: {
+          summary: 'Compatibility check.',
+          risk: 'low',
+          requiresConfirmation: false,
+          tasks: [{
+            id: 'compat-read',
+            title: 'Read package manifest',
+            role: 'researcher',
+            prompt: 'Read package.json and report its peer versions.',
+            dependsOn: [],
+            readOnly: true,
+            writeScopes: [],
+            contextBudget: 24_576,
+            outputReserveTokens: 2_048,
+            safetyReserveTokens: 1_024,
+            taskPackage: {
+              taskId: 'compat-read',
+              goal: 'Read the plugin package manifest.',
+              relevantContext: [],
+              constraints: [],
+              knownFacts: [],
+              files: ['package.json'],
+              dependencies: [],
+              expectedOutput: 'A structured report.',
+              doNot: [],
+            },
+          }],
+        },
+      },
+      phase: (): void => undefined,
+      parallel: async (thunks: Array<() => Promise<unknown>>): Promise<unknown[]> => Promise.all(thunks.map(thunk => thunk())),
+      agent: async (): Promise<unknown> => ({
+        taskId: 'compat-read',
+        status: 'completed',
+        summary: 'Peer versions are compatible.',
+        evidence: ['The profile uses versions accepted by the plugin.'],
+        changedFiles: [],
+        tests: ['workflow script admission'],
+        blockers: [],
+        nextSteps: [],
+      }),
+    }
+    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string; agentsStarted: number; workers: Array<{ status: string }> }>
+    expect(result.status).toBe('completed')
+    expect(result.agentsStarted).toBe(1)
+    expect(result.workers).toHaveLength(1)
+    expect(result.workers[0]?.status).toBe('completed')
   })
 })
