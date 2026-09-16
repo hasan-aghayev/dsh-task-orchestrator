@@ -13,7 +13,7 @@
 pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会启用工作流引擎以及面向模型的委派工具：`subagent`、`subagent_fork`、`send_message`、`interrupt_agent` 和 `list_agents`。它不会启用 DSH 独立的面向模型的 `workflow` 工具。卸载：
+包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会安装一个由本包拥有的委派组，其中包含工作流引擎以及面向模型的工具：`subagent`、`subagent_fork`、`send_message`、`interrupt_agent` 和 `list_agents`。它不会启用 DSH 独立的面向模型的 `workflow` 工具。标准 web profile 行会继续保持禁用，因此在 DSH Market 中关闭本插件时，该组及其全部工具会一起关闭。卸载：
 
 ```sh
 pnpm dsh plugin --profile web remove dsh-task-orchestrator
@@ -32,7 +32,7 @@ pnpm dsh plugin --profile web remove dsh-task-orchestrator
 
 支持的角色包括 `researcher`、`architect`、`backend`、`frontend`、`tester` 和 `documentation`。插件使用 DSH 现有的 subagent 与 workflow 服务，不修改 agent loop。
 
-模型还可以调用 `subagent` 创建新的子 Agent，调用 `subagent_fork` 继承父 Agent 已完成的轮次，并使用 `list_agents`、`send_message` 或 `interrupt_agent` 管理可继续的子 Agent。由于标准 web profile 默认关闭这些工具，组合包会显式启用它们。
+模型还可以调用 `subagent` 创建新的子 Agent，调用 `subagent_fork` 继承父 Agent 已完成的轮次，并使用 `list_agents`、`send_message` 或 `interrupt_agent` 管理可继续的子 Agent。这些工具作为组合包拥有的组子项加载，而不是修改基础行；因此 Market 开关是原子的：关闭插件会关闭该组及其五个面向模型的工具，web profile 的标准行也会保持关闭。
 
 ## 安全默认值
 

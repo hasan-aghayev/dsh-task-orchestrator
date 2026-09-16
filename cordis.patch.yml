@@ -1,32 +1,59 @@
+# Keep the orchestrator, its workflow engine, and its model-facing tools in one
+# package-owned group. The private ids avoid collisions with the standard rows
+# that the base and web bundles already declare. Disabling this group through
+# DSH Market disables every child row together with the orchestrator.
 - insert:
-    - id: task-orchestrator
-      name: dsh-task-orchestrator
+    - id: task-orchestrator-suite
+      name: cordis:group
+      group: true
+      isolate:
+        workflowEngine: true
+      config:
+        - id: task-orchestrator
+          name: dsh-task-orchestrator
 
-# The web profile keeps delegation and workflow tools disabled by default. This
-# bundle owns the complete delegation surface used by the orchestrator and by
-# explicit model requests: spawn, fork, and continuable-child controls.
+        - id: task-orchestrator-tool-subagent-control
+          name: '@deepseek-ai/dsh-tool-subagent-control'
+
+        - id: task-orchestrator-tool-subagent-list-agents
+          name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+        - id: task-orchestrator-tool-subagent
+          name: '@deepseek-ai/dsh-tool-subagent'
+          config:
+            provider: spawn
+            toolName: subagent
+            backgroundMode: continuable
+
+        - id: task-orchestrator-tool-subagent-fork
+          name: '@deepseek-ai/dsh-tool-subagent'
+          config:
+            provider: fork
+            toolName: subagent_fork
+            backgroundMode: one-shot
+
+        - id: task-orchestrator-workflow
+          name: '@deepseek-ai/dsh-workflow-ptc'
+          config:
+            provider: spawn
+
+# The base rows remain disabled while this bundle is installed. The group above
+# supplies its own enabled instances, so switching the package off cannot fall
+# back to a second copy of the same model-facing tools.
 - id: tool-subagent-control
-  disabled: false
+  disabled: true
 
 - id: tool-subagent-list-agents
-  disabled: false
+  disabled: true
 
 - id: tool-subagent
-  config:
-    provider: spawn
-    toolName: subagent
-    backgroundMode: continuable
-  disabled: false
+  disabled: true
 
 - id: tool-subagent-fork
-  config:
-    provider: fork
-    toolName: subagent_fork
-    backgroundMode: one-shot
-  disabled: false
+  disabled: true
 
 - id: workflow-ptc
-  name: '@deepseek-ai/dsh-workflow-ptc'
-  config:
-    provider: spawn
-  disabled: false
+  disabled: true
+
+- id: tool-workflow
+  disabled: true

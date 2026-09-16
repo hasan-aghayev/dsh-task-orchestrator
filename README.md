@@ -13,7 +13,7 @@ Install the public GitHub package into a DSH profile:
 pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle enables the workflow engine and the model-facing delegation surface: `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents`. It does not enable DSH's separate model-facing `workflow` tool. Remove it with:
+The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle installs one package-owned delegation group containing the workflow engine and the model-facing surface: `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents`. It does not enable DSH's separate model-facing `workflow` tool. The standard web-profile rows stay disabled, so disabling this plugin in DSH Market disables the group and all of these tools together. Remove it with:
 
 ```sh
 pnpm dsh plugin --profile web remove dsh-task-orchestrator
@@ -32,7 +32,7 @@ The plugin adds the `task_orchestrate` tool, enables the standard DSH delegation
 
 Supported roles are `researcher`, `architect`, `backend`, `frontend`, `tester`, and `documentation`. The plugin uses the existing DSH subagent and workflow services and does not modify the agent loop.
 
-The model can also call `subagent` for a fresh child, `subagent_fork` for a child that inherits completed parent turns, and `list_agents`, `send_message`, or `interrupt_agent` to manage continuable children. These tools are enabled by the bundle because the standard web profile disables them by default.
+The model can also call `subagent` for a fresh child, `subagent_fork` for a child that inherits completed parent turns, and `list_agents`, `send_message`, or `interrupt_agent` to manage continuable children. These tools are package-owned group children rather than edits to the base rows. That ownership makes the Market toggle atomic: plugin off means the group and all five model-facing tools are off, while the web profile's standard rows remain off as well.
 
 ## Safe defaults
 
