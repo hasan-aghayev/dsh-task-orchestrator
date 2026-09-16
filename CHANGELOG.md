@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — 2026-09-16
+
+- Bound NInfer model streams to a configurable two-request queue with priority aging, cancellation, and a conservative context-size guard.
+- Set the dynamic-worker profile defaults to six execution slots, two active generations, and a seven-child total ceiling including planner and reviewer control phases.
+- Add the reproducible RTX 3090 benchmark helper, measured candidate summary, and the approved implementation plan.
+
 ## 1.0.4 — 2026-09-16
 
 - Own the orchestrator, workflow engine, and model-facing delegation tools in one disableable `cordis:group`.

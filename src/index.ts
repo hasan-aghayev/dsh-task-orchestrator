@@ -7,7 +7,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock, type GenerateOptions, type StreamChunk, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { SubagentProvider } from '@deepseek-ai/dsh-subagent'
@@ -23,12 +23,13 @@ import {
   type TaskRisk,
   type WorkerReport,
 } from './types.js'
+import { ResourceManager } from './resource-manager.js'
 
 /** Plugin identifier used by the profile loader and durable notices. */
 export const name = 'task-orchestrator'
 
 /** Services required by the plugin. */
-export const inject = ['tools', 'workflowEngine', 'subagents', 'systemPrompt']
+export const inject = ['tools', 'workflowEngine', 'subagents', 'systemPrompt', 'agents']
 
 /** Automatic orchestration mode. */
 export type OrchestrationMode = 'off' | 'suggest' | 'hybrid' | 'auto'
@@ -61,6 +62,12 @@ export interface Config {
   maxHandoffChars?: number
   /** Maximum characters added to the parent model's current request. */
   maxResultChars?: number
+  /** Maximum model streams consumed at once by the local NInfer service. */
+  maxActiveGenerations?: number
+  /** Hard estimated input-token limit for one model request. */
+  hardContextTokens?: number
+  /** Queue wait interval after which a request gains one priority level. */
+  priorityAgingMs?: number
 }
 
 /** Schemastery configuration for the task orchestrator plugin. */
@@ -71,13 +78,16 @@ export const Config: z<Config> = z.object({
   subagentModel: z.string(),
   preferredWorkers: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(3),
   maxWorkers: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(6),
-  maxTotalAgents: z.number().step(1).min(2).max(Number.MAX_SAFE_INTEGER).default(8),
-  maxConcurrentAgents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(3),
+  maxTotalAgents: z.number().step(1).min(2).max(Number.MAX_SAFE_INTEGER).default(7),
+  maxConcurrentAgents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(2),
   allowWrites: z.boolean().default(false),
   allowParallelWrites: z.boolean().default(false),
   requireReview: z.boolean().default(true),
   maxHandoffChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(16_384),
   maxResultChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(16_384),
+  maxActiveGenerations: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(2),
+  hardContextTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(65_536),
+  priorityAgingMs: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(30_000),
 })
 
 interface ResolvedConfig {
@@ -94,6 +104,9 @@ interface ResolvedConfig {
   readonly requireReview: boolean
   readonly maxHandoffChars: number
   readonly maxResultChars: number
+  readonly maxActiveGenerations: number
+  readonly hardContextTokens: number
+  readonly priorityAgingMs: number
 }
 
 interface OrchestrationArgs {
@@ -229,18 +242,21 @@ function resolveConfig(config: Config): ResolvedConfig {
   const subagentModel = config.subagentModel
   const preferredWorkers = config.preferredWorkers ?? 3
   const maxWorkers = config.maxWorkers ?? 6
-  const maxTotalAgents = config.maxTotalAgents ?? 8
-  const maxConcurrentAgents = config.maxConcurrentAgents ?? 3
+  const maxTotalAgents = config.maxTotalAgents ?? 7
+  const maxConcurrentAgents = config.maxConcurrentAgents ?? 2
   const allowWrites = config.allowWrites ?? false
   const allowParallelWrites = config.allowParallelWrites ?? false
   const requireReview = config.requireReview ?? true
   const maxHandoffChars = config.maxHandoffChars ?? 16_384
   const maxResultChars = config.maxResultChars ?? 16_384
+  const maxActiveGenerations = config.maxActiveGenerations ?? 2
+  const hardContextTokens = config.hardContextTokens ?? 65_536
+  const priorityAgingMs = config.priorityAgingMs ?? 30_000
   if (!['off', 'suggest', 'hybrid', 'auto'].includes(mode)) throw new TypeError(`unknown orchestration mode: ${mode}`)
   if (!Number.isSafeInteger(minComplexityScore) || minComplexityScore < 1) throw new TypeError('minComplexityScore must be a positive safe integer')
   if (subagentProvider.length === 0 || subagentProvider !== subagentProvider.trim()) throw new TypeError('subagentProvider must be a non-empty normalized string')
   if (subagentModel !== undefined && (subagentModel.length === 0 || subagentModel !== subagentModel.trim())) throw new TypeError('subagentModel must be a non-empty normalized string when provided')
-  const limits = { preferredWorkers, maxWorkers, maxTotalAgents, maxConcurrentAgents, maxHandoffChars, maxResultChars }
+  const limits = { preferredWorkers, maxWorkers, maxTotalAgents, maxConcurrentAgents, maxHandoffChars, maxResultChars, maxActiveGenerations, hardContextTokens, priorityAgingMs }
   for (const [label, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${label} must be a positive safe integer`)
   }
@@ -261,6 +277,9 @@ function resolveConfig(config: Config): ResolvedConfig {
     requireReview,
     maxHandoffChars,
     maxResultChars,
+    maxActiveGenerations,
+    hardContextTokens,
+    priorityAgingMs,
   }
 }
 
@@ -468,7 +487,13 @@ function presentResult(args: { objective: string }, result: { content: ContentBl
 /** Register the explicit tool and the automatic pre-step planner. */
 export function apply(ctx: Context, config: Config): void {
   const resolved = resolveConfig(config)
+  const resources = new ResourceManager({
+    maxActiveGenerations: resolved.maxActiveGenerations,
+    hardContextTokens: resolved.hardContextTokens,
+    priorityAgingMs: resolved.priorityAgingMs,
+  })
   void requireStructuredProvider(ctx, resolved.subagentProvider)
+  ctx.on('llm/stream', (options: GenerateOptions, next: () => AsyncIterable<StreamChunk>) => resources.stream(ctx, options, next))
   ctx.systemPrompt.section({
     name: 'tool:task-orchestrate',
     order: 150,
@@ -582,7 +607,8 @@ function list(value) {
 function validatePlan(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('planner returned no object')
   if (!text(value.summary) || !['low', 'medium', 'high'].includes(value.risk) || typeof value.requiresConfirmation !== 'boolean') throw new Error('planner returned invalid summary, risk, or confirmation flag')
-  if (!Array.isArray(value.tasks) || value.tasks.length === 0 || value.tasks.length > args.maxWorkers) throw new Error('planner returned an invalid task count')
+  const taskLimit = Math.max(1, args.maxWorkers - (args.requireReview ? 1 : 0))
+  if (!Array.isArray(value.tasks) || value.tasks.length === 0 || value.tasks.length > taskLimit) throw new Error('planner returned an invalid task count')
   const ids = new Set()
   for (const task of value.tasks) {
     if (task === null || typeof task !== 'object' || Array.isArray(task) || !text(task.id) || !text(task.title) || !text(task.prompt) || !['researcher', 'architect', 'backend', 'frontend', 'tester', 'documentation'].includes(task.role) || typeof task.readOnly !== 'boolean' || !list(task.dependsOn) || !list(task.writeScopes)) throw new Error('planner returned an invalid task')
@@ -673,7 +699,7 @@ const plannerPrompt = [
   'You are the planning agent for a complex request.',
   'Create a small executable dependency graph for the objective below.',
   'Use separate roles where useful: researcher/architect for discovery, backend for services or data, frontend for UI, tester for verification, documentation for docs.',
-  'The planner runs first. A task may depend on the researcher or architect when it needs a discovered contract. Independent read-only tasks may run in parallel. Keep the graph at or below ' + args.maxWorkers + ' worker tasks.',
+  'The planner runs first. A task may depend on the researcher or architect when it needs a discovered contract. Independent read-only tasks may run in parallel. Keep the graph at or below ' + Math.max(1, args.maxWorkers - (args.requireReview ? 1 : 0)) + ' execution tasks; one of the six worker slots is reserved for the optional final reviewer.',
   'Every task must declare readOnly and writeScopes. Set requiresConfirmation true when implementation, deletion, migration, external mutation, or any other meaningful write is needed. If write permission is not enabled, still describe the needed work but it will remain plan-only.',
   'Objective:\n' + args.objective,
   'Return only the requested structured plan. Do not perform implementation in this planning call.',

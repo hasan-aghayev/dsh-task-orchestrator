@@ -3,3 +3,4 @@ lib/
 .pnpm-store/
 coverage/
 *.log
+bench/results/

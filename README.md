@@ -53,16 +53,21 @@ config:
   mode: hybrid
   minComplexityScore: 55
   subagentProvider: spawn
-  preferredWorkers: 3
+  preferredWorkers: 2
   maxWorkers: 6
-  maxTotalAgents: 8
-  maxConcurrentAgents: 3
+  maxTotalAgents: 7
+  maxConcurrentAgents: 2
   allowWrites: false
   allowParallelWrites: false
   requireReview: true
+  maxActiveGenerations: 2
+  hardContextTokens: 65536
+  priorityAgingMs: 30000
 ```
 
 The `suggest` mode always returns a plan first. `off` disables automatic planning but keeps the explicit tool. `auto` is available for deployments that intentionally permit automatic execution.
+
+`maxActiveGenerations` limits consumed model streams across the parent and children. A stream holds a lane only while its output is consumed; an agent waiting for tools or children does not hold one. `priorityAgingMs` raises a waiting request by one priority level after the configured interval, so a long-running worker cannot wait forever. `hardContextTokens` is a conservative pre-tokenization guard; NInfer remains authoritative for exact token counts. When review is enabled, one of the six worker slots is reserved for the final reviewer.
 
 The `task_orchestrate` tool accepts `objective`, optional `planOnly`, optional `executeWrites`, and an optional `maxWorkers` cap. A request-side cap can never exceed the configured deployment ceiling.
 

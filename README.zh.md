@@ -53,16 +53,21 @@ config:
   mode: hybrid
   minComplexityScore: 55
   subagentProvider: spawn
-  preferredWorkers: 3
+  preferredWorkers: 2
   maxWorkers: 6
-  maxTotalAgents: 8
-  maxConcurrentAgents: 3
+  maxTotalAgents: 7
+  maxConcurrentAgents: 2
   allowWrites: false
   allowParallelWrites: false
   requireReview: true
+  maxActiveGenerations: 2
+  hardContextTokens: 65536
+  priorityAgingMs: 30000
 ```
 
 `suggest` 模式总是先返回计划。`off` 会关闭自动规划，但保留显式工具。`auto` 适用于明确允许自动执行的部署。
+
+`maxActiveGenerations` 限制父 Agent 和子 Agent 同时消费的模型流。只有正在消费输出的流占用一个槽位；等待工具或子任务的 Agent 不占用槽位。`priorityAgingMs` 让排队请求在达到设定时间后提升一级优先级，避免 worker 长时间等待。`hardContextTokens` 是分词前的保守检查，精确 token 数仍由 NInfer 决定。启用 review 时，六个 worker 槽中的一个保留给最终 reviewer。
 
 `task_orchestrate` 工具接受 `objective`、可选的 `planOnly`、可选的 `executeWrites` 和可选的 `maxWorkers` 上限。请求级上限不能超过部署级上限。
 
