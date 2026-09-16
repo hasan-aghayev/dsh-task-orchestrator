@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import threading
 import time
 import urllib.request
+import urllib.error
 import uuid
 
 ROOT = Path(__file__).resolve().parent
@@ -28,11 +30,18 @@ def memory():
     return {'gpu_used_free_mib_util_percent': gpu, 'ram': {k: mem[k].strip() for k in ['MemTotal', 'MemAvailable', 'SwapFree', 'Mlocked', 'Unevictable']}}
 
 
-def generate(label, tokens=1024, output=128, previous=None, protocol='responses'):
+def prompt_for_tokens(tokens, nonce):
+    # Natural words avoid the extreme compression of a repeated character and
+    # produce a filled sequence whose actual count is recorded by NInfer.
+    rows = max(1, int(tokens * 4.2 // 66))
+    prompt = f'MEMORY_TEST={nonce}\n' + '\n'.join(f'Record {i}: alpha beta gamma delta value {i * 17}.' for i in range(rows))
+    return prompt + '\nReturn MEMORY_TEST followed by a short summary of the records.'
+
+
+def generate(label, tokens=1024, output=128, previous=None, protocol='responses', prompt_text=None, server_log=None):
     nonce = str(uuid.uuid4())
     # Each row's independent numbers defeat accidental cross-request prefix hits.
-    prompt = f'MEMORY_TEST={nonce}\n' + '\n'.join(f'Record {i}: alpha beta gamma delta value {i * 17}.' for i in range(max(1, tokens // 15)))
-    prompt += '\nReturn MEMORY_TEST followed by a short summary of the records.'
+    prompt = prompt_text or prompt_for_tokens(tokens, nonce)
     if previous:
         prompt = 'What is MEMORY_TEST? Return its exact value, then briefly describe the previous records.'
     body = {'model': 'qwen3.8-27b', 'input': prompt, 'max_output_tokens': output, 'temperature': 0, 'stream': True, 'store': True}
@@ -44,36 +53,97 @@ def generate(label, tokens=1024, output=128, previous=None, protocol='responses'
         body['reasoning'] = {'effort': 'none'}
     path = '/v1/chat/completions' if protocol == 'chat' else '/v1/responses'
     before = memory()
+    samples = [before]
+    stop_sampling = threading.Event()
+    def sample_memory():
+        while not stop_sampling.wait(0.25):
+            try:
+                samples.append(memory())
+            except (OSError, subprocess.CalledProcessError):
+                pass
+    sampler = threading.Thread(target=sample_memory, name='memory-sampler', daemon=True)
+    sampler.start()
     start = time.monotonic()
     record = {'label': label, 'requested_context_approx': tokens, 'nonce': nonce, 'protocol': protocol, 'before': before}
     request = urllib.request.Request(BASE + path, data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
     pieces = []
-    with urllib.request.urlopen(request, timeout=2400) as response:
-        record['request_id'] = response.headers.get('x-request-id')
-        for raw in response:
-            if not raw.startswith(b'data: '):
-                continue
-            payload = raw[6:].strip()
-            if payload == b'[DONE]':
-                continue
-            event = json.loads(payload)
-            if protocol == 'chat':
-                delta = (event.get('choices') or [{}])[0].get('delta', {}).get('content', '')
-                if event.get('usage'):
-                    record['usage'] = event['usage']
-            else:
-                delta = event.get('delta', '') if event.get('type') == 'response.output_text.delta' else ''
-                if event.get('type') in ['response.completed', 'response.incomplete', 'response.failed']:
-                    final = event['response']
-                    record.update(response_id=final['id'], usage=final.get('usage'), status=final.get('status'), error=final.get('error'))
-            if delta:
-                record.setdefault('ttft_seconds', time.monotonic() - start)
-                pieces.append(delta)
-    record.update(total_seconds=time.monotonic() - start, text=''.join(pieces), after=memory())
+    try:
+        with urllib.request.urlopen(request, timeout=2400) as response:
+            record['request_id'] = response.headers.get('x-request-id')
+            for raw in response:
+                if not raw.startswith(b'data: '):
+                    continue
+                payload = raw[6:].strip()
+                if payload == b'[DONE]':
+                    continue
+                event = json.loads(payload)
+                if protocol == 'chat':
+                    delta = (event.get('choices') or [{}])[0].get('delta', {}).get('content', '')
+                    if event.get('usage'):
+                        record['usage'] = event['usage']
+                else:
+                    delta = event.get('delta', '') if event.get('type') == 'response.output_text.delta' else ''
+                    if event.get('type') in ['response.completed', 'response.incomplete', 'response.failed']:
+                        final = event['response']
+                        record.update(response_id=final['id'], usage=final.get('usage'), status=final.get('status'), error=final.get('error'))
+                if delta:
+                    record.setdefault('ttft_seconds', time.monotonic() - start)
+                    pieces.append(delta)
+    except urllib.error.HTTPError as error:
+        try:
+            record['http_error'] = {'status': error.code, 'body': error.read().decode(errors='replace')[:2000]}
+        finally:
+            record['total_seconds'] = time.monotonic() - start
+    finally:
+        stop_sampling.set()
+        sampler.join(timeout=1)
+    record.update(total_seconds=record.get('total_seconds', time.monotonic() - start), text=''.join(pieces), after=memory(), peak_memory=summarize_peak(samples))
+    if server_log:
+        record['server_events'] = server_events(server_log, record.get('request_id'))
     with (RESULTS / 'requests.jsonl').open('a') as f:
         f.write(json.dumps(record) + '\n')
     print(json.dumps({k: v for k, v in record.items() if k not in ['text', 'before', 'after']}), flush=True)
     return record
+
+
+def summarize_peak(samples):
+    gpu_rows = []
+    for item in samples:
+        fields = [part.strip() for part in item.get('gpu_used_free_mib_util_percent', '').split(',')]
+        if len(fields) == 3:
+            try:
+                gpu_rows.append({'used_mib': float(fields[0]), 'free_mib': float(fields[1]), 'util_percent': float(fields[2])})
+            except ValueError:
+                pass
+    def kib(value):
+        try:
+            return float(value.split()[0])
+        except (AttributeError, ValueError, IndexError):
+            return 0.0
+    return {
+        'samples': len(samples),
+        'gpu_peak_used_mib': max((row['used_mib'] for row in gpu_rows), default=None),
+        'gpu_min_free_mib': min((row['free_mib'] for row in gpu_rows), default=None),
+        'gpu_peak_util_percent': max((row['util_percent'] for row in gpu_rows), default=None),
+        'ram_peak_mlocked_kib': max((kib(item.get('ram', {}).get('Mlocked')) for item in samples), default=None),
+        'ram_peak_unevictable_kib': max((kib(item.get('ram', {}).get('Unevictable')) for item in samples), default=None),
+    }
+
+
+def server_events(path, request_id):
+    if not Path(path).exists():
+        return []
+    rows = []
+    all_rows = []
+    for line in Path(path).read_text(errors='replace').splitlines()[-200:]:
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        all_rows.append(item)
+        if request_id is None or str(item.get('request', {}).get('request_id')) == str(request_id):
+            rows.append(item)
+    return (rows or all_rows)[-8:]
 
 
 def processes():
@@ -106,12 +176,12 @@ def stop():
             raise RuntimeError(f'NInfer {pid} did not stop; no forced kill issued')
 
 
-def launch(label, kv=None, host=8192, restore=False):
+def launch(label, kv=None, host=8192, restore=False, context=65536, concurrency=2):
     backup = Path((ROOT.parent / 'plans/backup-location.txt').read_text().strip())
     manifest = json.loads((backup / 'manifest.json').read_text())
     args = manifest['ninfer']['argv'].copy()
     if not restore:
-        for key, value in [('--max-context', 65536), ('--kv-capacity', kv), ('--max-concurrency', 2)]:
+        for key, value in [('--max-context', context), ('--kv-capacity', kv), ('--max-concurrency', concurrency)]:
             args[args.index(key) + 1] = str(value)
         args += ['--device-state-slots', '2', '--host-state-slots', '8', '--host-kv-mib', str(host), '--max-private-continuations', '8', '--max-shared-prefixes', '8']
     if label != 'original':
@@ -138,16 +208,17 @@ def launch(label, kv=None, host=8192, restore=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['baseline', 'launch', 'restore', 'smoke', 'queue'])
+    parser.add_argument('action', choices=['baseline', 'launch', 'restore', 'smoke', 'queue', 'solo-matrix'])
     parser.add_argument('--kv', type=int, default=65536)
     parser.add_argument('--host', type=int, default=8192)
     parser.add_argument('--label', default='candidate')
     parser.add_argument('--tokens', type=int, default=1024)
+    parser.add_argument('--context', type=int, default=65536)
     args = parser.parse_args()
     RESULTS.mkdir(exist_ok=True)
     if args.action == 'launch':
         try:
-            launch(args.label, args.kv, args.host)
+            launch(args.label, args.kv, args.host, context=args.context, concurrency=2)
         except Exception:
             launch('original', restore=True)
             raise
@@ -157,10 +228,29 @@ if __name__ == '__main__':
         for i in range(3):
             generate(f'baseline-{i}', tokens=1024, protocol='chat')
     elif args.action == 'smoke':
-        record = generate(args.label, tokens=args.tokens)
-        generate(args.label + '-restore', previous=record['response_id'])
+        log = RESULTS / f'{args.label}.server.jsonl'
+        record = generate(args.label, tokens=args.tokens, server_log=log)
+        generate(args.label + '-restore', previous=record['response_id'], server_log=log)
     elif args.action == 'queue':
         start = time.monotonic()
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             results = list(pool.map(lambda i: generate(f'{args.label}-{i}', tokens=args.tokens), range(6)))
         (RESULTS / f'{args.label}.queue.json').write_text(json.dumps({'wall_seconds': time.monotonic() - start, 'requests': results}, indent=2)+'\n')
+    elif args.action == 'solo-matrix':
+        # Start each candidate from a clean process. A failed candidate is
+        # recorded and the loop continues; the stable 80K profile is restored
+        # before the command exits.
+        outcomes = []
+        for target in [64_000, 72_000, 80_000, 88_000, 96_000, 104_000, 110_000]:
+            label = f'solo-{target // 1000}k'
+            try:
+                launch(label, kv=target, host=args.host, context=target, concurrency=1)
+                log = RESULTS / f'{label}.server.jsonl'
+                outcomes.append(generate(label, tokens=int(target * 0.85), output=1, server_log=log))
+            except Exception as error:
+                outcomes.append({'label': label, 'requested_context_approx': target, 'error': repr(error)})
+        try:
+            launch('kv80-host16', kv=81920, host=16384, context=65536, concurrency=2)
+        except Exception as error:
+            outcomes.append({'label': 'restore-stable', 'error': repr(error)})
+        (RESULTS / 'solo-matrix.json').write_text(json.dumps(outcomes, indent=2) + '\n')

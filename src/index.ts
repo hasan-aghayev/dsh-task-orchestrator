@@ -1,5 +1,5 @@
 /**
- * Automatic plan-first multi-role execution for complex foreground requests.
+ * Adaptive parent-orchestrator execution for complex foreground requests.
  * The plugin composes the existing subagent and workflow services without
  * changing the agent loop.
  * @module dsh-task-orchestrator
@@ -24,6 +24,8 @@ import {
   type WorkerReport,
 } from './types.js'
 import { ResourceManager } from './resource-manager.js'
+import { buildAdaptivePlan, CONTEXT_TIERS } from './adaptive.js'
+import { createOrchestrationScript } from './orchestration-script.js'
 
 /** Plugin identifier used by the profile loader and durable notices. */
 export const name = 'task-orchestrator'
@@ -40,15 +42,15 @@ export interface Config {
   mode?: OrchestrationMode
   /** Minimum deterministic complexity score that starts planning. */
   minComplexityScore?: number
-  /** Provider used for the planner, workers, and reviewer. */
+  /** Provider used for worker and reviewer children. */
   subagentProvider?: string
   /** Optional model override for all orchestration children. */
   subagentModel?: string
-  /** Preferred worker count passed to the planner. */
+  /** Preferred starting worker count used by the parent when it creates a graph. */
   preferredWorkers?: number
-  /** Hard worker count ceiling returned by the planner. */
+  /** Hard worker count ceiling accepted from the parent-created graph. */
   maxWorkers?: number
-  /** Total child-agent ceiling for one run, including planner and reviewer. */
+  /** Total worker-child ceiling for one run; the calling orchestrator is outside this count. */
   maxTotalAgents?: number
   /** Maximum concurrent worker children. */
   maxConcurrentAgents?: number
@@ -68,6 +70,12 @@ export interface Config {
   hardContextTokens?: number
   /** Queue wait interval after which a request gains one priority level. */
   priorityAgingMs?: number
+  /** Total estimated context budget available to one worker batch. */
+  totalContextTokens?: number
+  /** Minimum free VRAM in GiB required before a multi-worker batch is admitted. */
+  minimumVramHeadroomGiB?: number
+  /** Keep the parent as the only planner; no separate planner child is created. */
+  parentOrchestratorOnly?: boolean
 }
 
 /** Schemastery configuration for the task orchestrator plugin. */
@@ -78,7 +86,7 @@ export const Config: z<Config> = z.object({
   subagentModel: z.string(),
   preferredWorkers: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(3),
   maxWorkers: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(6),
-  maxTotalAgents: z.number().step(1).min(2).max(Number.MAX_SAFE_INTEGER).default(7),
+  maxTotalAgents: z.number().step(1).min(1).max(6).default(6),
   maxConcurrentAgents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(2),
   allowWrites: z.boolean().default(false),
   allowParallelWrites: z.boolean().default(false),
@@ -88,6 +96,9 @@ export const Config: z<Config> = z.object({
   maxActiveGenerations: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(2),
   hardContextTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(65_536),
   priorityAgingMs: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(30_000),
+  totalContextTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(98_304),
+  minimumVramHeadroomGiB: z.number().min(0).max(24).default(0.8),
+  parentOrchestratorOnly: z.boolean().default(true),
 })
 
 interface ResolvedConfig {
@@ -107,6 +118,9 @@ interface ResolvedConfig {
   readonly maxActiveGenerations: number
   readonly hardContextTokens: number
   readonly priorityAgingMs: number
+  readonly totalContextTokens: number
+  readonly minimumVramHeadroomGiB: number
+  readonly parentOrchestratorOnly: boolean
 }
 
 interface OrchestrationArgs {
@@ -122,6 +136,10 @@ interface OrchestrationArgs {
   requireReview: boolean
   subagentProvider: string
   subagentModel?: string
+  plan: TaskPlan
+  totalContextTokens: number
+  minimumVramHeadroomGiB: number
+  parentOrchestratorOnly: boolean
 }
 
 interface StartOptions {
@@ -132,6 +150,7 @@ interface StartOptions {
   readonly executeWrites: boolean
   readonly preferredWorkers?: number
   readonly maxWorkers?: number
+  readonly plan?: TaskPlan
 }
 
 const COMPLEXITY_TERMS = [
@@ -163,6 +182,25 @@ const PLAN_SCHEMA = {
           dependsOn: { type: 'array', items: { type: 'string' } },
           readOnly: { type: 'boolean' },
           writeScopes: { type: 'array', items: { type: 'string' } },
+          contextBudget: { type: 'integer', enum: [...CONTEXT_TIERS] },
+          outputReserveTokens: { type: 'integer' },
+          safetyReserveTokens: { type: 'integer' },
+          taskPackage: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string' },
+              goal: { type: 'string' },
+              relevantContext: { type: 'array', items: { type: 'string' } },
+              constraints: { type: 'array', items: { type: 'string' } },
+              knownFacts: { type: 'array', items: { type: 'string' } },
+              files: { type: 'array', items: { type: 'string' } },
+              dependencies: { type: 'array', items: { type: 'string' } },
+              expectedOutput: { type: 'string' },
+              doNot: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['taskId', 'goal', 'relevantContext', 'constraints', 'knownFacts', 'files', 'expectedOutput', 'doNot'],
+            additionalProperties: false,
+          },
         },
         required: ['id', 'title', 'role', 'prompt', 'dependsOn', 'readOnly', 'writeScopes'],
         additionalProperties: false,
@@ -173,17 +211,83 @@ const PLAN_SCHEMA = {
   additionalProperties: false,
 } as const
 
+/**
+ * Explicit tool schema for a parent-created graph.
+ *
+ * Keeping this as an object schema gives the model the fields it must place
+ * directly under `plan`; a free-form JSON property made it easy to send a
+ * second `{ plan: ... }` wrapper that the workflow cannot validate.
+ */
+const TOOL_PLAN_SCHEMA = {
+  type: 'object',
+  description: 'The task graph itself. Put summary, risk, requiresConfirmation, and tasks directly here; do not wrap them in another plan property.',
+  additionalProperties: false,
+  properties: {
+    summary: { type: 'string', required: true },
+    risk: { type: 'string', enum: ['low', 'medium', 'high'], required: true },
+    requiresConfirmation: { type: 'boolean', required: true },
+    tasks: {
+      type: 'array',
+      required: true,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string', required: true },
+          title: { type: 'string', required: true },
+          role: { type: 'string', enum: [...TASK_ROLES], required: true },
+          prompt: { type: 'string', required: true },
+          dependsOn: { type: 'array', items: { type: 'string' }, required: true },
+          readOnly: { type: 'boolean', required: true },
+          writeScopes: { type: 'array', items: { type: 'string' }, required: true },
+          contextBudget: { type: 'integer', enum: [...CONTEXT_TIERS] },
+          outputReserveTokens: { type: 'integer' },
+          safetyReserveTokens: { type: 'integer' },
+          taskPackage: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              taskId: { type: 'string', required: true },
+              goal: { type: 'string', required: true },
+              relevantContext: { type: 'array', items: { type: 'string' }, required: true },
+              constraints: { type: 'array', items: { type: 'string' }, required: true },
+              knownFacts: { type: 'array', items: { type: 'string' }, required: true },
+              files: { type: 'array', items: { type: 'string' }, required: true },
+              dependencies: { type: 'array', items: { type: 'string' }, required: true },
+              expectedOutput: { type: 'string', required: true },
+              doNot: { type: 'array', items: { type: 'string' }, required: true },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const
+
 const WORKER_SCHEMA = {
   type: 'object',
   properties: {
     taskId: { type: 'string' },
-    status: { type: 'string', enum: ['completed', 'blocked', 'failed'] },
+    status: { type: 'string', enum: ['completed', 'blocked', 'failed', 'needs_more_context'] },
     summary: { type: 'string' },
     evidence: { type: 'array', items: { type: 'string' } },
     changedFiles: { type: 'array', items: { type: 'string' } },
     tests: { type: 'array', items: { type: 'string' } },
     blockers: { type: 'array', items: { type: 'string' } },
     nextSteps: { type: 'array', items: { type: 'string' } },
+    needs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['NEED_FILE', 'NEED_HISTORY', 'NEED_MORE_CONTEXT', 'NEED_DEPENDENCY', 'NEED_BUDGET', 'NEED_TOOL_RESULT', 'NEED_MORE_TOOL', 'NEED_REVIEW'] },
+          reason: { type: 'string' },
+          requestedContextTokens: { type: 'integer', enum: [...CONTEXT_TIERS] },
+        },
+        required: ['kind', 'reason'],
+        additionalProperties: false,
+      },
+    },
   },
   required: ['taskId', 'status', 'summary', 'evidence', 'changedFiles', 'tests', 'blockers', 'nextSteps'],
   additionalProperties: false,
@@ -204,11 +308,11 @@ const REVIEW_SCHEMA = {
 
 const ORCHESTRATION_META = {
   name: 'task-orchestrator',
-  description: 'Plan-first role-based execution with dependency-aware workers and a final reviewer.',
+  description: 'One parent orchestrator with adaptive dependency-aware workers and an optional reviewer worker.',
   phases: [
-    { title: 'Planning', detail: 'One structured planner creates the task graph.' },
+    { title: 'Planning', detail: 'The parent orchestrator creates or validates a small task graph.' },
     { title: 'Execution', detail: 'Independent roles run in bounded batches after their dependencies.' },
-    { title: 'Review', detail: 'One structured reviewer checks the collected evidence.' },
+    { title: 'Review', detail: 'A reviewer uses one ordinary worker slot when the plan requests a review.' },
   ],
 }
 
@@ -242,7 +346,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   const subagentModel = config.subagentModel
   const preferredWorkers = config.preferredWorkers ?? 3
   const maxWorkers = config.maxWorkers ?? 6
-  const maxTotalAgents = config.maxTotalAgents ?? 7
+  const maxTotalAgents = config.maxTotalAgents ?? 6
   const maxConcurrentAgents = config.maxConcurrentAgents ?? 2
   const allowWrites = config.allowWrites ?? false
   const allowParallelWrites = config.allowParallelWrites ?? false
@@ -252,17 +356,23 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxActiveGenerations = config.maxActiveGenerations ?? 2
   const hardContextTokens = config.hardContextTokens ?? 65_536
   const priorityAgingMs = config.priorityAgingMs ?? 30_000
+  const totalContextTokens = config.totalContextTokens ?? 98_304
+  const minimumVramHeadroomGiB = config.minimumVramHeadroomGiB ?? 0.8
+  const parentOrchestratorOnly = config.parentOrchestratorOnly ?? true
   if (!['off', 'suggest', 'hybrid', 'auto'].includes(mode)) throw new TypeError(`unknown orchestration mode: ${mode}`)
   if (!Number.isSafeInteger(minComplexityScore) || minComplexityScore < 1) throw new TypeError('minComplexityScore must be a positive safe integer')
   if (subagentProvider.length === 0 || subagentProvider !== subagentProvider.trim()) throw new TypeError('subagentProvider must be a non-empty normalized string')
   if (subagentModel !== undefined && (subagentModel.length === 0 || subagentModel !== subagentModel.trim())) throw new TypeError('subagentModel must be a non-empty normalized string when provided')
-  const limits = { preferredWorkers, maxWorkers, maxTotalAgents, maxConcurrentAgents, maxHandoffChars, maxResultChars, maxActiveGenerations, hardContextTokens, priorityAgingMs }
+  const limits = { preferredWorkers, maxWorkers, maxTotalAgents, maxConcurrentAgents, maxHandoffChars, maxResultChars, maxActiveGenerations, hardContextTokens, priorityAgingMs, totalContextTokens }
   for (const [label, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${label} must be a positive safe integer`)
   }
   if (preferredWorkers > maxWorkers) throw new TypeError('preferredWorkers cannot exceed maxWorkers')
-  if (maxTotalAgents < 2) throw new TypeError('maxTotalAgents must allow planner and reviewer')
+  if (maxWorkers > 6) throw new TypeError('maxWorkers cannot exceed six workers')
+  if (maxTotalAgents > 6) throw new TypeError('maxTotalAgents cannot exceed six workers')
+  if (maxTotalAgents < 1) throw new TypeError('maxTotalAgents must allow one worker')
   if (maxConcurrentAgents > maxWorkers) throw new TypeError('maxConcurrentAgents cannot exceed maxWorkers')
+  if (!Number.isFinite(minimumVramHeadroomGiB) || minimumVramHeadroomGiB < 0) throw new TypeError('minimumVramHeadroomGiB must be a non-negative finite number')
   return {
     mode,
     minComplexityScore,
@@ -280,10 +390,13 @@ function resolveConfig(config: Config): ResolvedConfig {
     maxActiveGenerations,
     hardContextTokens,
     priorityAgingMs,
+    totalContextTokens,
+    minimumVramHeadroomGiB,
+    parentOrchestratorOnly,
   }
 }
 
-/** Require a fresh structured-output route for planner, worker, and reviewer calls. */
+/** Require a fresh structured-output route for worker and reviewer calls. */
 function requireStructuredProvider(ctx: Context, providerName: string): SubagentProvider {
   const provider = ctx.subagents.getProvider(providerName)
   if (provider === undefined) throw new Error(`task-orchestrator subagent provider "${providerName}" is not registered`)
@@ -293,8 +406,8 @@ function requireStructuredProvider(ctx: Context, providerName: string): Subagent
 }
 
 /** Validate one request-side worker cap against the deployment policy. */
-function resolveWorkerCap(requested: number | undefined, preferred: number, ceiling: number): number {
-  const value = requested ?? preferred
+function resolveWorkerCap(requested: number | undefined, ceiling: number): number {
+  const value = requested ?? ceiling
   if (!Number.isSafeInteger(value) || value < 1) throw new TypeError('maxWorkers must be a positive safe integer')
   if (value > ceiling) throw new TypeError(`maxWorkers ${value} exceeds the deployment ceiling ${ceiling}`)
   return value
@@ -381,13 +494,13 @@ function readOrchestrationResult(value: unknown, maxHandoffChars: number): Orche
     || (value.plan !== null && !isRecord(value.plan))) {
     throw new Error('task-orchestrator workflow returned a malformed result')
   }
-  if (typeof value.agentsStarted !== 'number' || !Number.isSafeInteger(value.agentsStarted) || value.agentsStarted < 1) {
+  if (typeof value.agentsStarted !== 'number' || !Number.isSafeInteger(value.agentsStarted) || value.agentsStarted < 0) {
     throw new Error('task-orchestrator workflow returned an invalid agentsStarted value')
   }
   for (const worker of value.workers) {
     if (!isRecord(worker)
       || !hasNormalizedText(worker.taskId)
-      || !['completed', 'blocked', 'failed'].includes(String(worker.status))
+      || !['completed', 'blocked', 'failed', 'needs_more_context'].includes(String(worker.status))
       || !hasNormalizedText(worker.summary)) {
       throw new Error('task-orchestrator workflow returned a malformed worker report')
     }
@@ -396,6 +509,12 @@ function readOrchestrationResult(value: unknown, maxHandoffChars: number): Orche
     readStringList(worker.tests)
     readStringList(worker.blockers)
     readStringList(worker.nextSteps)
+    if (worker.needs !== undefined) {
+      if (!Array.isArray(worker.needs)) throw new Error('task-orchestrator workflow returned malformed worker needs')
+      for (const need of worker.needs) {
+        if (!isRecord(need) || !['NEED_FILE', 'NEED_HISTORY', 'NEED_MORE_CONTEXT', 'NEED_DEPENDENCY', 'NEED_BUDGET', 'NEED_TOOL_RESULT', 'NEED_MORE_TOOL', 'NEED_REVIEW'].includes(String(need.kind)) || !hasNormalizedText(need.reason)) throw new Error('task-orchestrator workflow returned malformed worker need')
+      }
+    }
   }
   if (value.review !== null) {
     const review = value.review
@@ -425,8 +544,10 @@ async function startOrchestration(
   resolved: ResolvedConfig,
   options: StartOptions,
 ): Promise<OrchestrationResult & { runId: string }> {
-  const workerCap = resolveWorkerCap(options.maxWorkers, options.preferredWorkers ?? resolved.preferredWorkers, resolved.maxWorkers)
+  const deploymentWorkerCeiling = Math.min(resolved.maxWorkers, resolved.maxTotalAgents)
+  const workerCap = resolveWorkerCap(options.maxWorkers, deploymentWorkerCeiling)
   const allowWrites = resolved.allowWrites || options.executeWrites
+  const plan = options.plan ?? buildAdaptivePlan(options.objective, options.preferredWorkers ?? resolved.preferredWorkers, workerCap, resolved.requireReview)
   const args: OrchestrationArgs = {
     objective: options.objective,
     planOnly: options.planOnly,
@@ -440,6 +561,10 @@ async function startOrchestration(
     requireReview: resolved.requireReview,
     subagentProvider: resolved.subagentProvider,
     ...(resolved.subagentModel === undefined ? {} : { subagentModel: resolved.subagentModel }),
+    plan,
+    totalContextTokens: resolved.totalContextTokens,
+    minimumVramHeadroomGiB: resolved.minimumVramHeadroomGiB,
+    parentOrchestratorOnly: resolved.parentOrchestratorOnly,
   }
   void requireStructuredProvider(ctx, resolved.subagentProvider)
   const workflowEngine = ctx.get('workflowEngine')
@@ -469,10 +594,9 @@ async function startOrchestration(
 }
 
 const DESCRIPTION = 'Inspect a complex request, create a strict role/dependency plan, run bounded '
-  + 'research, backend, frontend, testing, or documentation workers when approved, and finish with '
-  + 'one reviewer report. In automatic mode the plugin may call this workflow before the parent model '
-  + 'answers. Use the explicit tool only after the human approves a displayed plan or explicitly asks '
-  + 'for a multi-role team. Writes are disabled by default.'
+  + 'research, backend, frontend, testing, or documentation workers when approved. The parent remains '
+  + 'the only orchestrator; a reviewer is an ordinary worker when requested. Use the explicit tool only '
+  + 'after the human approves a displayed plan or explicitly asks for a multi-role team. Writes are disabled by default.'
 
 function presentCall(args: { objective: string }): ToolCallView {
   return { card: 'generic', title: 'task orchestrator', rawInput: args.objective }
@@ -484,7 +608,7 @@ function presentResult(args: { objective: string }, result: { content: ContentBl
   return { card: 'generic' }
 }
 
-/** Register the explicit tool and the automatic pre-step planner. */
+/** Register the explicit tool and the automatic pre-step orchestrator. */
 export function apply(ctx: Context, config: Config): void {
   const resolved = resolveConfig(config)
   const resources = new ResourceManager({
@@ -497,7 +621,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'tool:task-orchestrate',
     order: 150,
-    text: 'The task_orchestrate tool is a bounded plan-first team workflow. Use it only after the human explicitly approves a displayed plan or explicitly requests a multi-role team. The automatic task-orchestrator may already have added a plan or execution report to the current request. Planner, workers, and reviewer return structured evidence; worker claims are not independent certification. Writes require the configured policy or an explicit human-approved executeWrites request.',
+    text: 'The task_orchestrate tool is a bounded adaptive team workflow. The parent model is the only orchestrator and may provide a task graph; omitted graphs use a minimal deterministic plan without a planner child. Use the tool only after the human explicitly approves a displayed plan or explicitly requests a multi-role team. Workers, including an optional reviewer worker, return structured evidence; worker claims are not independent certification. Writes require the configured policy or an explicit human-approved executeWrites request.',
   })
   ctx.tools.register(defineTool({
     name: 'task_orchestrate',
@@ -519,6 +643,10 @@ export function apply(ctx: Context, config: Config): void {
       maxWorkers: {
         type: 'number',
         description: 'Optional worker cap, never above the deployment setting.',
+      },
+      plan: {
+        ...TOOL_PLAN_SCHEMA,
+        description: 'Optional parent-created task graph. Pass the graph object itself, with summary/risk/requiresConfirmation/tasks at its top level. When omitted, the plugin builds a minimal deterministic graph without a planner child.',
       },
     },
     output: {
@@ -544,6 +672,7 @@ export function apply(ctx: Context, config: Config): void {
         planOnly: args.planOnly ?? false,
         executeWrites: args.executeWrites ?? false,
         ...(args.maxWorkers === undefined ? {} : { maxWorkers: args.maxWorkers }),
+        ...(args.plan === undefined ? {} : { plan: args.plan as unknown as TaskPlan }),
       })
       return {
         runId: value.runId,
@@ -591,167 +720,6 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 /** Fixed script executed in the workflow VM; user input is supplied only through args. */
-const ORCHESTRATION_SCRIPT = String.raw`
-const planSchema = ${JSON.stringify(PLAN_SCHEMA)}
-const workerSchema = ${JSON.stringify(WORKER_SCHEMA)}
-const reviewSchema = ${JSON.stringify(REVIEW_SCHEMA)}
-
-function text(value) {
-  return typeof value === 'string' && value.length > 0 && value === value.trim()
-}
-
-function list(value) {
-  return Array.isArray(value) && value.every(text)
-}
-
-function validatePlan(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('planner returned no object')
-  if (!text(value.summary) || !['low', 'medium', 'high'].includes(value.risk) || typeof value.requiresConfirmation !== 'boolean') throw new Error('planner returned invalid summary, risk, or confirmation flag')
-  const taskLimit = Math.max(1, args.maxWorkers - (args.requireReview ? 1 : 0))
-  if (!Array.isArray(value.tasks) || value.tasks.length === 0 || value.tasks.length > taskLimit) throw new Error('planner returned an invalid task count')
-  const ids = new Set()
-  for (const task of value.tasks) {
-    if (task === null || typeof task !== 'object' || Array.isArray(task) || !text(task.id) || !text(task.title) || !text(task.prompt) || !['researcher', 'architect', 'backend', 'frontend', 'tester', 'documentation'].includes(task.role) || typeof task.readOnly !== 'boolean' || !list(task.dependsOn) || !list(task.writeScopes)) throw new Error('planner returned an invalid task')
-    if (ids.has(task.id)) throw new Error('planner returned duplicate task ids')
-    ids.add(task.id)
-  }
-  for (const task of value.tasks) {
-    if (task.dependsOn.includes(task.id) || task.dependsOn.some((dependency) => !ids.has(dependency))) throw new Error('planner returned an unknown or self dependency')
-  }
-  const visiting = new Set()
-  const visited = new Set()
-  function visit(id) {
-    if (visiting.has(id)) throw new Error('planner returned a dependency cycle')
-    if (visited.has(id)) return
-    visiting.add(id)
-    const task = value.tasks.find((item) => item.id === id)
-    for (const dependency of task.dependsOn) visit(dependency)
-    visiting.delete(id)
-    visited.add(id)
-  }
-  for (const task of value.tasks) visit(task.id)
-  return bounded(value, 'planner handoff')
-}
-
-function validateWorker(value, taskId) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) || value.taskId !== taskId || !['completed', 'blocked', 'failed'].includes(value.status) || !text(value.summary) || !list(value.evidence) || !list(value.changedFiles) || !list(value.tests) || !list(value.blockers) || !list(value.nextSteps)) throw new Error('worker returned an invalid report')
-  return bounded(value, 'worker handoff')
-}
-
-function validateReview(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) || !['approved', 'changes_requested', 'blocked', 'failed'].includes(value.status) || !text(value.summary) || !list(value.findings) || !list(value.checks) || !list(value.nextSteps)) throw new Error('reviewer returned an invalid report')
-  return bounded(value, 'reviewer handoff')
-}
-
-function hasWrite(task) {
-  return !task.readOnly || task.writeScopes.length > 0
-}
-
-function scopesOverlap(left, right) {
-  function overlaps(leftScope, rightScope) {
-    return leftScope === rightScope
-      || leftScope.startsWith(rightScope + '/')
-      || rightScope.startsWith(leftScope + '/')
-      || leftScope.startsWith(rightScope + '\\')
-      || rightScope.startsWith(leftScope + '\\')
-  }
-  return left.some((leftScope) => right.some((rightScope) => overlaps(leftScope, rightScope)))
-}
-
-function bounded(value, label) {
-  const serialized = JSON.stringify(value)
-  if (serialized === undefined || serialized.length > args.maxHandoffChars) throw new Error(label + ' exceeds maxHandoffChars')
-  return value
-}
-
-function workerPrompt(task, reports) {
-  return [
-    'You are the ' + task.role + ' worker in a bounded multi-role task.',
-    'Do not start another orchestration and do not invent work outside your task.',
-    'Objective:\n' + args.objective,
-    'Your task:\n' + task.title + '\n' + task.prompt,
-    'Declared dependencies are complete. Treat their reports as leads and verify them in the workspace.',
-    'Prior worker reports:\n' + JSON.stringify(reports),
-    'Write permission: ' + (args.allowWrites ? 'allowed only inside declared writeScopes' : 'read-only; do not edit files'),
-    'Declared write scopes: ' + JSON.stringify(task.writeScopes),
-    'Return a strict structured report with concrete evidence, changedFiles, tests, blockers, and nextSteps. Do not claim a test passed unless you ran it or have durable evidence.',
-  ].join('\n\n')
-}
-
-function reviewerPrompt(plan, workers) {
-  return [
-    'You are the final reviewer for a multi-role task.',
-    'Objective:\n' + args.objective,
-    'Plan:\n' + JSON.stringify(plan),
-    'Worker reports:\n' + JSON.stringify(workers),
-    'Inspect the current workspace and compare worker claims with evidence. Return approved only when the objective is adequately verified. Use changes_requested for actionable missing work and blocked for a human or external dependency.',
-  ].join('\n\n')
-}
-
-function childOptions(label, phaseName, schema) {
-  const options = { label, phase: phaseName, schema }
-  if (args.subagentModel !== undefined) options.model = args.subagentModel
-  return options
-}
-
-phase('Planning')
-const plannerPrompt = [
-  'You are the planning agent for a complex request.',
-  'Create a small executable dependency graph for the objective below.',
-  'Use separate roles where useful: researcher/architect for discovery, backend for services or data, frontend for UI, tester for verification, documentation for docs.',
-  'The planner runs first. A task may depend on the researcher or architect when it needs a discovered contract. Independent read-only tasks may run in parallel. Keep the graph at or below ' + Math.max(1, args.maxWorkers - (args.requireReview ? 1 : 0)) + ' execution tasks; one of the six worker slots is reserved for the optional final reviewer.',
-  'Every task must declare readOnly and writeScopes. Set requiresConfirmation true when implementation, deletion, migration, external mutation, or any other meaningful write is needed. If write permission is not enabled, still describe the needed work but it will remain plan-only.',
-  'Objective:\n' + args.objective,
-  'Return only the requested structured plan. Do not perform implementation in this planning call.',
-].join('\n\n')
-const planned = await agent(plannerPrompt, childOptions('Planner', 'Planning', planSchema))
-if (planned === null) return { status: 'failed', summary: 'Planner failed before producing a plan.', plan: null, workers: [], review: null, agentsStarted: 1 }
-const plan = validatePlan(planned)
-const needsWriteApproval = plan.requiresConfirmation || plan.tasks.some(hasWrite)
-if (args.planOnly || (needsWriteApproval && !args.allowWrites)) return { status: 'plan-only', summary: 'A plan was created and is awaiting explicit write approval.', plan, workers: [], review: null, agentsStarted: 1 }
-
-phase('Execution')
-const remaining = plan.tasks.slice()
-const completed = new Map()
-const workers = []
-let workersStarted = 0
-while (remaining.length > 0) {
-  const ready = remaining.filter((task) => task.dependsOn.every((dependency) => completed.get(dependency)?.status === 'completed'))
-  if (ready.length === 0) {
-    for (const task of remaining) workers.push({ taskId: task.id, status: 'blocked', summary: 'Dependency did not complete.', evidence: [], changedFiles: [], tests: [], blockers: ['A required dependency failed or was blocked.'], nextSteps: [] })
-    break
-  }
-  const batch = []
-  for (const task of ready) {
-    const conflicts = batch.some((selected) => scopesOverlap(selected.writeScopes, task.writeScopes))
-    const batchHasWrite = batch.some(hasWrite)
-    const canShareBatch = !hasWrite(task) && !batchHasWrite || args.allowParallelWrites && !conflicts
-    if (batch.length === 0 || canShareBatch) batch.push(task)
-    if (batch.length >= args.maxConcurrentAgents) break
-    if (!args.allowParallelWrites && hasWrite(task)) break
-  }
-  workersStarted += batch.length
-  const rawReports = await parallel(batch.map((task) => () => agent(workerPrompt(task, workers), childOptions(task.role + ': ' + task.title, 'Execution', workerSchema))))
-  for (let index = 0; index < batch.length; index += 1) {
-    const task = batch[index]
-    const raw = rawReports[index]
-    const report = raw === null ? { taskId: task.id, status: 'failed', summary: 'Worker failed before producing a report.', evidence: [], changedFiles: [], tests: [], blockers: ['No structured worker result was returned.'], nextSteps: [] } : validateWorker(raw, task.id)
-    workers.push(report)
-    completed.set(task.id, report)
-    const position = remaining.indexOf(task)
-    if (position >= 0) remaining.splice(position, 1)
-  }
-}
-
-let review = null
-if (args.requireReview) {
-  phase('Review')
-  const rawReview = await agent(reviewerPrompt(plan, workers), childOptions('Reviewer', 'Review', reviewSchema))
-  review = rawReview === null ? { status: 'failed', summary: 'Reviewer failed before producing a report.', findings: ['No structured reviewer result was returned.'], checks: [], nextSteps: ['Review the worker reports manually.'] } : validateReview(rawReview)
-}
-const workerFailure = workers.some((worker) => worker.status !== 'completed')
-const status = workerFailure || review?.status === 'blocked' || review?.status === 'failed' ? 'blocked' : review?.status === 'changes_requested' ? 'blocked' : 'completed'
-return { status, summary: status === 'completed' ? 'All planned roles completed and the reviewer approved the result.' : 'The orchestration produced partial work or requires follow-up.', plan, workers, review, agentsStarted: 1 + workersStarted + (review === null ? 0 : 1) }
-`
+const ORCHESTRATION_SCRIPT = createOrchestrationScript({ plan: PLAN_SCHEMA, worker: WORKER_SCHEMA, review: REVIEW_SCHEMA })
 
 export type { OrchestrationResult, PlannedTask, ReviewReport, TaskPlan, TaskRisk, WorkerReport }

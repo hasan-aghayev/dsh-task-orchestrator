@@ -53,7 +53,11 @@ export function estimateInputTokens(options: GenerateOptions): number {
     }, 0)
   }
   for (const tool of options.tools ?? []) characters += tool.name.length + tool.description.length + (JSON.stringify(tool.parameters)?.length ?? 32) + 32
-  return Math.ceil(characters / 3)
+  // English and Russian prose in the active Qwen tokenizer averages close to
+  // four characters per token. This estimate remains conservative because
+  // role/id/tool overhead is counted above; NInfer still performs the exact
+  // admission check after tokenization.
+  return Math.ceil(characters / 4)
 }
 
 /** Queue and consume model streams while preserving the provider stream contract. */

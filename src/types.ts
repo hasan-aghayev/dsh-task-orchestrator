@@ -1,4 +1,4 @@
-/** Roles that the planner may assign to worker agents. */
+/** Roles that the parent orchestrator may assign to worker agents. */
 export const TASK_ROLES = [
   'researcher',
   'architect',
@@ -6,6 +6,7 @@ export const TASK_ROLES = [
   'frontend',
   'tester',
   'documentation',
+  'reviewer',
 ] as const
 
 /** A role in the task execution graph. */
@@ -15,7 +16,7 @@ export type TaskRole = (typeof TASK_ROLES)[number]
 export type TaskRisk = 'low' | 'medium' | 'high'
 
 /** Status returned by an individual worker. */
-export type WorkerStatus = 'completed' | 'blocked' | 'failed'
+export type WorkerStatus = 'completed' | 'blocked' | 'failed' | 'needs_more_context'
 
 /** Status returned by the final reviewer. */
 export type ReviewStatus = 'approved' | 'changes_requested' | 'blocked' | 'failed'
@@ -29,6 +30,41 @@ export interface PlannedTask {
   dependsOn: string[]
   readOnly: boolean
   writeScopes: string[]
+  /** Context tier selected by the parent orchestrator. */
+  contextBudget?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536
+  /** Reserved output tokens used during admission. */
+  outputReserveTokens?: number
+  /** Additional safety reserve used during admission. */
+  safetyReserveTokens?: number
+  /** Isolated task packet sent to the worker. */
+  taskPackage?: TaskPackage
+}
+
+/** Isolated worker input packet; fields are intentionally explicit. */
+export interface TaskPackage {
+  taskId: string
+  goal: string
+  relevantContext: string[]
+  constraints: string[]
+  knownFacts: string[]
+  files: string[]
+  dependencies: string[]
+  expectedOutput: string
+  doNot: string[]
+}
+
+/** Worker request for more context, a tool, or a review pass. */
+export interface WorkerNeed {
+  kind: 'NEED_FILE' | 'NEED_HISTORY' | 'NEED_MORE_CONTEXT' | 'NEED_DEPENDENCY' | 'NEED_BUDGET' | 'NEED_TOOL_RESULT' | 'NEED_MORE_TOOL' | 'NEED_REVIEW'
+  reason: string
+  requestedContextTokens?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536
+}
+
+/** Durable state snapshot for one logical task. */
+export interface TaskState {
+  taskId: string
+  state: 'CREATED' | 'QUEUED' | 'ACTIVE' | 'WAITING' | 'DONE' | 'FAILED' | 'CANCELLED' | 'PARKED'
+  attempts: number
 }
 
 /** The strict result expected from the planning agent. */
@@ -49,6 +85,7 @@ export interface WorkerReport {
   tests: string[]
   blockers: string[]
   nextSteps: string[]
+  needs?: WorkerNeed[]
 }
 
 /** Structured result expected from the final reviewer agent. */
@@ -68,4 +105,5 @@ export interface OrchestrationResult {
   workers: WorkerReport[]
   review: ReviewReport | null
   agentsStarted: number
+  taskStates?: TaskState[]
 }

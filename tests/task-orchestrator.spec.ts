@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { scoreComplexity } from '../src/index.ts'
 import { ResourceManager, estimateInputTokens } from '../src/resource-manager.ts'
+import { CONTEXT_TIERS, buildAdaptivePlan, estimateTaskBudget, packReadyTasks, selectContextTier } from '../src/adaptive.ts'
 
 describe('DSH Task Orchestrator', () => {
   it('does not delegate a short, single-purpose request', () => {
@@ -14,6 +15,31 @@ describe('DSH Task Orchestrator', () => {
 
   it('keeps the score bounded', () => {
     expect(scoreComplexity('frontend backend test docs review '.repeat(100))).toBeLessThanOrEqual(100)
+  })
+
+  it('selects the smallest supported context tier and rejects an over-limit request', () => {
+    expect(selectContextTier(8_193)).toBe(16_384)
+    expect(selectContextTier(65_537)).toBeUndefined()
+    expect(CONTEXT_TIERS).toEqual([8_192, 16_384, 24_576, 32_768, 49_152, 65_536])
+  })
+
+  it('packs only the largest safe ready tasks into the available generation budget', () => {
+    const task = (id: string, contextTokens: 8192 | 16384 | 24576) => ({
+      task: { id, title: id, role: 'researcher' as const, prompt: id, dependsOn: [], readOnly: true, writeScopes: [], contextBudget: contextTokens },
+      budget: estimateTaskBudget(contextTokens, 0, 0),
+      package: { taskId: id, goal: id, relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: id, doNot: [] },
+    })
+    const result = packReadyTasks([task('large', 24_576), task('small-a', 8_192), task('small-b', 8_192)], { maxWorkers: 6, maxActiveGenerations: 2, totalContextTokens: 32_768, safetyReserveTokens: 0 })
+    expect(result.selected.map(item => item.task.id)).toEqual(['large', 'small-a'])
+    expect(result.deferred.map(item => item.task.id)).toEqual(['small-b'])
+  })
+
+  it('builds a minimal parent plan with a reviewer inside the worker ceiling', () => {
+    const plan = buildAdaptivePlan('Исследуй API, добавь тесты и документацию.', 3, 6, true)
+    expect(plan.tasks.length).toBe(4)
+    expect(plan.tasks.at(-1)?.role).toBe('reviewer')
+    expect(plan.tasks.at(-1)?.dependsOn).toEqual(plan.tasks.slice(0, -1).map(task => task.id))
+    expect(plan.tasks.every(task => task.taskPackage?.taskId === task.id)).toBe(true)
   })
 
   it('estimates prompt and tool text for the hard request limit', () => {
