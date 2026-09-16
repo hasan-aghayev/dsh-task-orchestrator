@@ -160,7 +160,7 @@ Runtime smoke: NInfer `/health` возвращает `{"status":"ok"}`; DSH от
 
 # ROLLBACK
 
-Остановить только процессы кандидата DSH/NInfer, восстановить сохранённые файлы из `/home/diffusionlab/backups/dynamic-workers-3090-20260916T104739Z`, переключить плагин на ветку `codex/dynamic-workers-3090`, затем запустить исходный NInfer с `--max-context 8192 --kv-capacity 16384 --max-concurrency 6 --kv-dtype int8` и прежний профиль `web`. Не удалять экспериментальную копию оркестратора внутри DSH.
+Остановить только процессы кандидата DSH/NInfer, восстановить сохранённые файлы из `/home/diffusionlab/backups/dynamic-workers-3090-20260916T104739Z`, вернуть `/home/diffusionlab/.dsh/profiles/web-multiagent-3090/cordis.patch.yml` из `/home/diffusionlab/backups/dynamic-workers-3090-lingshu-20260916T123000Z/cordis.patch.yml.before`, переключить плагин на ветку `codex/dynamic-workers-3090`, затем запустить исходный NInfer с `--max-context 8192 --kv-capacity 16384 --max-concurrency 6 --kv-dtype int8` и прежний профиль `web`. Не удалять экспериментальную копию оркестратора внутри DSH.
 
 # FINAL ANSWERS
 
