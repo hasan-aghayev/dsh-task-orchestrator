@@ -10,13 +10,13 @@ License: MIT
 Install the public GitHub package into a DSH profile:
 
 ```sh
-pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
+dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
 The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle installs one package-owned delegation group containing the workflow engine and the model-facing surface: `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents`. It does not enable DSH's separate model-facing `workflow` tool. The standard web-profile rows stay disabled, so disabling this plugin in DSH Market disables the group and all of these tools together. Remove it with:
 
 ```sh
-pnpm dsh plugin --profile web remove dsh-task-orchestrator
+dsh plugin --profile web remove dsh-task-orchestrator
 ```
 
 Restart the profile after installation if it is already running.
@@ -97,6 +97,10 @@ pnpm build
 ```
 
 The package emits JavaScript to `lib/` and declaration files to `lib/types/`. The published package contains only the built runtime, declarations, bundle patch, and paired READMEs.
+
+## Compatibility
+
+Version 1.0.7 was checked against DeepSeek Harness `0.1.7-alpha.2` and Node `24.15.0`. The package uses the current typed message-source API when it adds a durable orchestration notice.
 
 ## Limitations
 

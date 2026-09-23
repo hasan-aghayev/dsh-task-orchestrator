@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.7 — 2026-09-23
+
+- Use the DSH 0.1.7 typed message-source contract for durable orchestration notices.
+- Expand the peer-package ranges to include DSH 0.1.7 prereleases.
+- Check the package against DeepSeek Harness 0.1.7-alpha.2.
+
 ## 1.0.6 — 2026-09-17
 
 - Add worker context tiers through 81,920 and 98,304 tokens while keeping the local profile's shared budget at 98,304.

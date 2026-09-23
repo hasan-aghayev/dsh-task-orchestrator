@@ -10,13 +10,13 @@
 将公开 GitHub 包安装到 DSH profile：
 
 ```sh
-pnpm dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
+dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
 包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会安装一个由本包拥有的委派组，其中包含工作流引擎以及面向模型的工具：`subagent`、`subagent_fork`、`send_message`、`interrupt_agent` 和 `list_agents`。它不会启用 DSH 独立的面向模型的 `workflow` 工具。标准 web profile 行会继续保持禁用，因此在 DSH Market 中关闭本插件时，该组及其全部工具会一起关闭。卸载：
 
 ```sh
-pnpm dsh plugin --profile web remove dsh-task-orchestrator
+dsh plugin --profile web remove dsh-task-orchestrator
 ```
 
 如果 profile 已在运行，安装后请重启它。
@@ -97,6 +97,10 @@ pnpm build
 ```
 
 包会将 JavaScript 输出到 `lib/`，将声明文件输出到 `lib/types/`。发布包只包含构建后的运行时、声明文件、bundle patch 和成对的 README。
+
+## 兼容性
+
+1.0.7 版本已在 DeepSeek Harness `0.1.7-alpha.2` 和 Node `24.15.0` 上检查。添加持久化编排通知时，包使用当前的类型化消息来源 API。
 
 ## 限制
 

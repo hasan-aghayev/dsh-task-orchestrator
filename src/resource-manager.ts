@@ -61,7 +61,7 @@ type Admission = Omit<Waiter, 'resolve' | 'reject' | 'settled' | 'sequence' | 'e
 export function estimateInputTokens(options: GenerateOptions): number {
   let characters = options.system?.length ?? 0
   for (const message of options.messages) {
-    characters += message.role.length + message.id.length + 16
+    characters += message.role.length + (message.id?.length ?? 0) + 16
     characters += message.content.reduce((total, block) => {
       if (block.type === 'text' || block.type === 'reasoning') return total + block.text.length
       if (block.type === 'tool-call') return total + block.name.length + block.arguments.length
@@ -137,7 +137,14 @@ export class ResourceManager {
     if (!Number.isSafeInteger(cost) || cost > this.totalContextTokens) throw new Error(`model request cost ${cost} tokens exceeds total context budget ${this.totalContextTokens}`)
     const maxActiveGenerations = this.limitFor(estimated)
     const priority = options.sessionId !== undefined && ctx.agents.get(options.sessionId)?.session.header.origin === 'subagent' ? 1 : 0
-    return this.consume({ options, next, priority, signal: options.signal, cost, maxActiveGenerations })
+    return this.consume({
+      options,
+      next,
+      priority,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      cost,
+      maxActiveGenerations,
+    })
   }
 
   /** Choose the first configured concurrency range that contains an estimate. */

@@ -7,7 +7,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { createUserMessage, type ContentBlock, type GenerateOptions, type StreamChunk, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock, type ContextFormed, type GenerateOptions, type StreamChunk, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { SubagentProvider } from '@deepseek-ai/dsh-subagent'
@@ -26,6 +26,12 @@ import {
 import { ResourceManager } from './resource-manager.js'
 import { buildAdaptivePlan, CONTEXT_TIERS } from './adaptive.js'
 import { createOrchestrationScript } from './orchestration-script.js'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'task-orchestrator': { kind: 'task-orchestrator' } & ContextFormed
+  }
+}
 
 /** Plugin identifier used by the profile loader and durable notices. */
 export const name = 'task-orchestrator'
@@ -489,7 +495,7 @@ function renderHandoff(value: OrchestrationResult, score: number, maxChars: numb
 function createHandoffMessage(value: OrchestrationResult, score: number, maxChars: number): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text: renderHandoff(value, score, maxChars) }],
-    source: { kind: 'plugin', plugin: name, form: 'notice', summary: `orchestration ${value.status}` },
+    source: { kind: name, form: 'notice', summary: `orchestration ${value.status}` },
   })
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-orchestrator",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Adaptive parent-orchestrator role delegation for DeepSeek Harness with dependency-aware workers and optional review.",
   "author": {
     "name": "Hasan Aghayev",
@@ -69,13 +69,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
-    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
-    "@deepseek-ai/dsh-subagent": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
-    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7 || >=0.1.7-alpha.1 <0.1.8",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7 || >=0.1.7-alpha.1 <0.1.8",
+    "@deepseek-ai/dsh-subagent": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7 || >=0.1.7-alpha.1 <0.1.8",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7 || >=0.1.7-alpha.1 <0.1.8",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7 || >=0.1.7-alpha.1 <0.1.8",
     "@deepseek-ai/dsh-util-values": ">=0.1.2-alpha.2 <0.2.0",
-    "@deepseek-ai/dsh-workflow": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7"
+    "@deepseek-ai/dsh-workflow": ">=0.1.0-rc.8 <0.2.0 || >=0.1.6-alpha.1 <0.1.7 || >=0.1.7-alpha.1 <0.1.8"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
