@@ -7,6 +7,25 @@ import { CONTEXT_TIERS, buildAdaptivePlan, estimateTaskBudget, packReadyTasks, s
 import { createOrchestrationScript } from '../src/orchestration-script.ts'
 
 describe('DSH Task Orchestrator', () => {
+  it('declares DSH 0.2.0-rc.2 compatibility for every required runtime package', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      peerDependencies: Record<string, string>
+      dependencies: Record<string, string>
+    }
+    for (const name of [
+      '@deepseek-ai/dsh-agent',
+      '@deepseek-ai/dsh-llm',
+      '@deepseek-ai/dsh-subagent',
+      '@deepseek-ai/dsh-system-prompt',
+      '@deepseek-ai/dsh-tools',
+      '@deepseek-ai/dsh-util-values',
+      '@deepseek-ai/dsh-workflow',
+    ]) {
+      expect(manifest.peerDependencies[name]).toContain('^0.2.0-rc.2')
+    }
+    expect(manifest.dependencies['@deepseek-ai/schemastery']).toBe('^3.18.4')
+  })
+
   it('does not delegate a short, single-purpose request', () => {
     expect(scoreComplexity('Show the current branch')).toBeLessThan(55)
   })

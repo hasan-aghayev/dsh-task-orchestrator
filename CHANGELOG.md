@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.8 — 2026-09-30
+
+- Add peer ranges for DeepSeek Harness 0.2.0-rc.2 while retaining the previously supported 0.1.x ranges.
+- Update development dependencies to the matching DSH 0.2.0-rc.2 APIs and Cordis 4.0.4.
+- Require Schemastery 3.18.4, which types DSH 0.2 volatile config values correctly.
+- Document the compatibility range in both shipped READMEs and add a metadata regression check.
+
 ## 1.0.7 — 2026-09-23
 
 - Use the DSH 0.1.7 typed message-source contract for durable orchestration notices.

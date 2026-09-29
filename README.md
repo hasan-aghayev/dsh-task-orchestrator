@@ -100,7 +100,7 @@ The package emits JavaScript to `lib/` and declaration files to `lib/types/`. Th
 
 ## Compatibility
 
-Version 1.0.7 was checked against DeepSeek Harness `0.1.7-alpha.2` and Node `24.15.0`. The package uses the current typed message-source API when it adds a durable orchestration notice.
+Version 1.0.8 supports the previously declared DSH 0.1.x versions and DeepSeek Harness `0.2.0-rc.2` or later releases in the `0.2.x` line. Version 1.0.7 and earlier do not declare support for DSH 0.2.x. Version 1.0.8 was type-checked and tested against the DSH `0.2.0-rc.2` package APIs, Cordis `4.0.4`, and Schemastery `3.18.4` with Node `24.18.0`.
 
 ## Limitations
 
