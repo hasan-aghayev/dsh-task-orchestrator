@@ -13,6 +13,8 @@
 dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
+从 GitHub 安装时，准备阶段会使用包内声明的 TypeScript 依赖进行编译。发布清单不固定 pnpm 版本，因此安装会使用当前 DSH profile 提供的包管理器。
+
 包的 `package.json` 声明了 `dsh.bundle`，因此该命令会自动发现并应用 `cordis.patch.yml`。组合包会安装一个由本包拥有的委派组，其中包含工作流引擎以及面向模型的工具：`subagent`、`subagent_fork`、`send_message`、`interrupt_agent` 和 `list_agents`。它不会启用 DSH 独立的面向模型的 `workflow` 工具。标准 web profile 行会继续保持禁用，因此在 DSH Market 中关闭本插件时，该组及其全部工具会一起关闭。卸载：
 
 ```sh

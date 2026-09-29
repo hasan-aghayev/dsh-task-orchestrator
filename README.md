@@ -13,6 +13,8 @@ Install the public GitHub package into a DSH profile:
 dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
+GitHub installs compile the package with its declared TypeScript dependency during preparation. The published manifest leaves pnpm selection to the DSH profile so the install uses the package manager provided by that DSH runtime.
+
 The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle installs one package-owned delegation group containing the workflow engine and the model-facing surface: `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents`. It does not enable DSH's separate model-facing `workflow` tool. The standard web-profile rows stay disabled, so disabling this plugin in DSH Market disables the group and all of these tools together. Remove it with:
 
 ```sh

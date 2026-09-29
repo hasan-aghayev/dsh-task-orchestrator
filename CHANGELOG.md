@@ -5,6 +5,7 @@
 - Add peer ranges for DeepSeek Harness 0.2.0-rc.2 while retaining the previously supported 0.1.x ranges.
 - Update development dependencies to the matching DSH 0.2.0-rc.2 APIs and Cordis 4.0.4.
 - Require Schemastery 3.18.4, which types DSH 0.2 volatile config values correctly.
+- Let DSH choose its profile pnpm version for Git installs and compile with the local TypeScript binary during package preparation.
 - Document the compatibility range in both shipped READMEs and add a metadata regression check.
 
 ## 1.0.7 — 2026-09-23

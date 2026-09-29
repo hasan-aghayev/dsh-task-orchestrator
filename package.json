@@ -24,7 +24,6 @@
     "orchestration"
   ],
   "type": "module",
-  "packageManager": "pnpm@12.4.1",
   "engines": {
     "node": ">=22.19.0"
   },
@@ -60,7 +59,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "prepare": "pnpm build",
+    "prepare": "tsc -p tsconfig.json",
     "prepack": "pnpm build",
     "prepublishOnly": "pnpm build"
   },

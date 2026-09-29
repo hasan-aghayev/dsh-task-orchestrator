@@ -11,6 +11,7 @@ describe('DSH Task Orchestrator', () => {
     const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
       peerDependencies: Record<string, string>
       dependencies: Record<string, string>
+      scripts: Record<string, string>
     }
     for (const name of [
       '@deepseek-ai/dsh-agent',
@@ -24,6 +25,8 @@ describe('DSH Task Orchestrator', () => {
       expect(manifest.peerDependencies[name]).toContain('^0.2.0-rc.2')
     }
     expect(manifest.dependencies['@deepseek-ai/schemastery']).toBe('^3.18.4')
+    expect(manifest).not.toHaveProperty('packageManager')
+    expect(manifest.scripts.prepare).toBe('tsc -p tsconfig.json')
   })
 
   it('does not delegate a short, single-purpose request', () => {
