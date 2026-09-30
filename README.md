@@ -1,6 +1,6 @@
 # DSH Task Orchestrator
 
-[Usage guide](SCENARIO.md) · [Upgrade guide](UPGRADE-1.1.md) · [Release verification](VERIFICATION.md)
+[Usage guide](SCENARIO.md) · [Upgrade to 1.2](UPGRADE-1.2.md) · [Upgrade from 1.0](UPGRADE-1.1.md) · [Release verification](VERIFICATION.md)
 
 The parent model writes and assigns a TODO plan before starting isolated workers. Independent work uses up to two model streams by default; additional tasks wait in a dependency-aware queue. The parent receives structured results, missing-data requests and a final review. Short questions use the ordinary single-agent path.
 
@@ -17,10 +17,10 @@ Author: Hasan Aghayev · License: MIT
 
 ## Installation
 
-Version 1.1.1 targets the DSH 0.2 API line and is tested against `0.2.0-rc.2`. Install the versioned release package into a DSH profile:
+Version 1.2.0 targets the DSH 0.2 API line and is tested against `0.2.0-rc.2`. Install the versioned release package into a DSH profile:
 
 ```sh
-dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator/releases/download/v1.1.1/dsh-task-orchestrator-1.1.1.tgz
+dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator/releases/download/v1.2.0/dsh-task-orchestrator-1.2.0.tgz
 ```
 
 Use your profile name in place of `web`. The same command accepts a locally built tarball. To install the latest source from the default branch, use:
@@ -63,9 +63,27 @@ An empty `scheduledProviders` list schedules every LLM route in this process. Se
 
 `mode: off` disables automatic planning instructions and guards but retains the explicit tool. `suggest` asks for a saved plan first; existing human authorization permits execution. `hybrid` and `auto` instruct the parent to plan and execute substantial work within existing authorization. Plans requesting confirmation, and unauthorized write tasks, return `plan-only`. A bounded reminder policy reports failure if a required plan is never saved.
 
-The web **Settings → Task Orchestrator** page edits planning mode, active task slots, logical task count, final review, shared model streams and both context budgets. Advanced controls edit context/concurrency ranges, total child starts and starts per task. Numeric context inputs preserve exact saved values; sliders use 1,024-token steps. Zero disables that global context check, while task budgets and concurrency limits still apply. Conflicting combinations disable Save. The defaults action stages the two-worker settings without saving them automatically.
+The web **Settings → Task Orchestrator** page edits models and reasoning for all three roles, planning mode, active task slots, logical task count, final review, shared model streams and both context budgets. Advanced controls edit context/concurrency ranges, total child starts and starts per task. Numeric context inputs preserve exact saved values; sliders use 1,024-token steps. Zero disables that global context check, while task budgets and concurrency limits still apply. Conflicting combinations disable Save. The defaults action stages the two-worker settings without saving them automatically and preserves model assignments.
 
 One atomic, revision-fenced Save changes only edited fields in the profile. A refusal keeps the draft; a newer Host revision requires Reload. Outcome notices live in the shell and survive closing Settings. New task runs snapshot their execution policy; active runs keep that policy. Model streams read current request limits. Queued requests honor the latest shared/global limits and tighter context ceilings; lowering a limit does not cancel active streams. Updating the installed plugin package requires restarting DSH to load the new Host schema.
+
+## Models and reasoning
+
+Choose **Orchestrator model**, **Worker model** and **Reviewer model** in Settings, then choose each model's reasoning level and Save. Models are grouped by their registered LLM provider. Levels come from DSH's model catalog; there is no fixed list of efforts and no reasoning control for models that do not advertise adjustable reasoning. Changing a model clears its previous effort. **Model default** omits an explicit effort, allowing the selected model's provider default.
+
+| Role | Model fields | Reasoning field | Inheritance when no model is assigned |
+| --- | --- | --- | --- |
+| Orchestrator | `orchestratorProvider`, `orchestratorModel` | `orchestratorReasoningEffort` | Keep the current chat selection and reasoning. |
+| Workers | `subagentLlmProvider`, `subagentModel` | `subagentReasoningEffort` | Inherit the parent's effective selection and reasoning. |
+| Reviewer | `reviewerProvider`, `reviewerModel` | `reviewerReasoningEffort` | Inherit the worker selection and reasoning. |
+
+These are plain strings in profile YAML. Empty strings mean inheritance for model/provider fields and the model default for an explicitly assigned model's effort. A parent or reviewer assignment requires both provider and model. Legacy `subagentModel` without `subagentLlmProvider` remains supported and inherits the parent's provider. `subagentProvider: spawn` chooses the child execution service, while `subagentLlmProvider` chooses the LLM route.
+
+The Web parent uses DSH's native model selector before prompt assembly. A saved parent assignment applies to a newly active parent and after its model/effort settings change; an explicit later chat selection remains available. The native selector records the selection in the Session and also updates DSH's default model for future chats. Clearing the saved assignment preserves the current chat choice. Headless profiles use DSH's scoped model-selection helper. Both paths keep prompt model information and actual request routing consistent, including changes made during asynchronous assembly.
+
+Worker and reviewer selections are captured once per tool invocation, including an explicit resume. Active children and remaining queued tasks in that invocation keep the captured selections. An explicit assignment without an effort clears inherited reasoning even when it names the same model as the parent. Actual request headers record provider, model and resolved effort. Unavailable or unsupported choices fail through DSH's validation; the plugin does not silently substitute a model.
+
+**Refresh models** reloads the native catalog. Discovery failures retain saved choices and other staged edits. A stored unavailable assignment remains visible and can be cleared; unrelated queue settings can still be saved. The form validates newly edited assignments against the successfully loaded catalog. Models must already be configured in the DSH profile; assigning one here does not install or load a local model server.
 
 ## Tool fields
 
@@ -89,7 +107,7 @@ corepack pnpm@12.4.1 pack
 
 The development and CI environment uses Node.js 24 and pnpm 12.4.1. Runtime requires Node.js 22.19 or later. The package does not pin the profile's package manager; DSH manages profile installation.
 
-Tests control child settlement with barriers and exercise the shipped DSH production loop, real spawn provider, native TODO and a scripted model adapter. They verify context isolation, two active lanes, queue refill, read-only denial, output limits, hard task-budget rejection, missing-data resume, interrupted-run recovery, cancellation and reviewer approval. The scripted adapter does not establish a real local model's reliability or hardware throughput.
+Tests control child settlement with barriers and exercise the shipped DSH production loop, real spawn provider, native TODO and a scripted model adapter. They verify separate provider/model/effort assignments, logged routing, context isolation, two active lanes, queue refill, read-only denial, output limits, hard task-budget rejection, missing-data resume, interrupted-run recovery, cancellation and reviewer approval. The scripted adapter does not establish a real local model's reliability or hardware throughput.
 
 Host JavaScript and the browser settings module are built into `lib/`; declarations are in `lib/types/`. The [verification report](VERIFICATION.md) records the checks and their limits. Read [the upgrade guide](UPGRADE-1.1.md) before replacing a 1.0.x installation.
 

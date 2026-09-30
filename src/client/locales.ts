@@ -13,9 +13,35 @@ export type ContextSettingsLocaleKey =
   | 'maxChildStartsTitle' | 'maxChildStartsHelp' | 'maxAttemptsPerTaskTitle' | 'maxAttemptsPerTaskHelp'
   | 'defaults' | 'applyRule' | 'invalidNumber' | 'invalidWorkers' | 'invalidStarts' | 'invalidContext' | 'invalidTiers'
   | 'save' | 'saving' | 'saved' | 'saveFailed' | 'conflict' | 'reload'
+  | 'modelsTitle' | 'modelsHelp' | 'refreshModels' | 'modelsFailed' | 'modelsPartial' | 'invalidModel' | 'modelUnavailable' | 'legacyModel'
+  | 'orchestratorModel' | 'workerModel' | 'reviewerModel' | 'orchestratorModelHelp' | 'workerModelHelp' | 'reviewerModelHelp'
+  | 'orchestratorInherit' | 'workerInherit' | 'reviewerInherit' | 'orchestratorEffort' | 'workerEffort' | 'reviewerEffort' | 'effortHelp' | 'effortDefault' | 'effortInherit'
 
 /** English labels. */
 export const en: Record<ContextSettingsLocaleKey, string> = {
+  modelsTitle: 'Models and reasoning',
+  modelsHelp: 'Choose saved defaults for each role. Parent changes apply before its next request; new task runs capture worker and reviewer choices. Running requests keep their selection.',
+  refreshModels: 'Refresh models',
+  modelsFailed: 'Models could not be loaded. Refresh the list to try again. Your saved choices are retained.',
+  modelsPartial: 'Models are unavailable from these providers:',
+  invalidModel: 'Choose an available model and a reasoning level it supports, or use inheritance.',
+  modelUnavailable: 'unavailable',
+  legacyModel: 'inherited provider',
+  orchestratorModel: 'Orchestrator model',
+  workerModel: 'Worker model',
+  reviewerModel: 'Reviewer model',
+  orchestratorModelHelp: 'Plans work and combines results. A saved choice applies to new chats and after Settings changes. You can then choose another model in the chat.',
+  workerModelHelp: 'Used by all workers, each with a separate context. Choose any model registered in this DSH profile.',
+  reviewerModelHelp: 'Checks completed worker results in a separate read-only context when final review is enabled.',
+  orchestratorInherit: 'Use current chat model',
+  workerInherit: 'Inherit orchestrator model and reasoning',
+  reviewerInherit: 'Inherit worker model and reasoning',
+  orchestratorEffort: 'Orchestrator reasoning',
+  workerEffort: 'Worker reasoning',
+  reviewerEffort: 'Reviewer reasoning',
+  effortHelp: 'Available levels come from the selected model. Choose a model first. Models without adjustable reasoning use their own behavior.',
+  effortDefault: 'Model default',
+  effortInherit: 'Inherit reasoning',
   executionTitle: "Tasks and queue",
   contextTitle: "Context limits",
   modeTitle: "Planning mode",
@@ -40,7 +66,7 @@ export const en: Record<ContextSettingsLocaleKey, string> = {
   maxChildStartsHelp: "Default: 12. Includes workers, final review and explicit repeat attempts. Must cover every task in a plan.",
   maxAttemptsPerTaskTitle: "Starts allowed for one task",
   maxAttemptsPerTaskHelp: "Default: 2. A repeat requires the parent to supply new data or correct the task; these are limits, not automatic retries.",
-  advancedHelp: "Model/provider routing and write permissions remain in the configuration file. Permission to edit files is checked separately from these queue limits.",
+  advancedHelp: "Write permissions remain in the configuration file. Permission to edit files is checked separately from these queue limits. Two-worker defaults preserve your model choices.",
   defaults: "Use two-worker defaults",
   applyRule: "Save persists edited fields only. New runs use the saved task policy. Running plans keep their policy; global request limits apply at later queue admissions, without cancelling active streams.",
   invalidNumber: "Enter whole, non-negative numbers. Empty fields cannot be saved.",
@@ -77,6 +103,29 @@ export const en: Record<ContextSettingsLocaleKey, string> = {
 
 /** Simplified Chinese labels used by the DSH client's built-in locale set. */
 export const zh: Record<ContextSettingsLocaleKey, string> = {
+  modelsTitle: '模型与推理',
+  modelsHelp: '保存各角色的默认选择。父 Agent 在下一次请求前应用变更；新任务运行保存 Worker 和审核者的选择。正在进行的请求保持原选择。',
+  refreshModels: '刷新模型',
+  modelsFailed: '模型加载失败，请刷新后重试。已保存的选择仍保留',
+  modelsPartial: '以下提供方的模型不可用：',
+  invalidModel: '请选择可用模型及其支持的推理级别，或使用继承',
+  modelUnavailable: '不可用',
+  legacyModel: '继承提供方',
+  orchestratorModel: '编排器模型',
+  workerModel: 'Worker 模型',
+  reviewerModel: '审核者模型',
+  orchestratorModelHelp: '规划任务并汇总结果。保存的选择用于新聊天及设置变更后；之后仍可在聊天中选择其他模型。',
+  workerModelHelp: '所有 Worker 使用此模型，各自拥有独立上下文。可选择此 DSH profile 中注册的模型。',
+  reviewerModelHelp: '启用最终审核时，在独立只读上下文中检查 Worker 的结果。',
+  orchestratorInherit: '使用当前聊天模型',
+  workerInherit: '继承编排器模型与推理',
+  reviewerInherit: '继承 Worker 模型与推理',
+  orchestratorEffort: '编排器推理',
+  workerEffort: 'Worker 推理',
+  reviewerEffort: '审核者推理',
+  effortHelp: '可用级别由所选模型提供。请先选择模型。不支持调整推理的模型使用自身行为。',
+  effortDefault: '模型默认值',
+  effortInherit: '继承推理',
   executionTitle: "任务与队列",
   contextTitle: "上下文限制",
   modeTitle: "规划模式",
@@ -101,7 +150,7 @@ export const zh: Record<ContextSettingsLocaleKey, string> = {
   maxChildStartsHelp: "默认 12。包括 Worker、最终审核与明确重复尝试。必须覆盖计划的全部任务。",
   maxAttemptsPerTaskTitle: "单个任务的启动次数",
   maxAttemptsPerTaskHelp: "默认 2。再次执行需要父 Agent 提供新数据或修正任务；这是上限，不是自动重试。",
-  advancedHelp: "模型路由与写入权限仍在配置文件中设置。文件编辑权限独立于这些队列限制。",
+  advancedHelp: "写入权限仍在配置文件中设置，并独立于队列限制。双 Worker 默认值保留模型选择。",
   defaults: "使用双 Worker 默认值",
   applyRule: "保存仅持久化已编辑字段。新运行使用已保存的任务策略，现有计划保持原策略。全局请求限制在后续队列准入时生效，不取消活动请求。",
   invalidNumber: "请输入非负整数；空字段不能保存",

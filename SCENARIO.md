@@ -1,4 +1,4 @@
-# Usage guide — version 1.1.1
+# Usage guide — version 1.2.0
 
 The parent agent plans the work, assigns tasks, receives worker results and answers the user. A worker is a separate agent with its own conversation context. By default, two workers can perform independent work together; other tasks wait until their dependencies are complete and capacity is available.
 
@@ -33,9 +33,13 @@ If the profile also uses cloud models, configure `scheduledProviders` with the l
 
 ## Settings page
 
-Open **Settings → Task Orchestrator**. The main controls edit planning mode, task slots, logical task count, review, model streams and context budgets. **Advanced** contains the context/concurrency table and retry limits.
+Open **Settings → Task Orchestrator**. **Models and reasoning** contains separate model and effort controls for the orchestrator, workers and reviewer. The other controls edit planning mode, task slots, logical task count, review, model streams and context budgets. **Advanced** contains the context/concurrency table and retry limits.
 
-Context limits accept exact numeric input; sliders move in 1,024-token steps. Zero removes the corresponding global context check, while task budgets, concurrency limits and the model's own context window still apply. **Use two-worker defaults** stages the recommended values. Press **Save** to persist them.
+Choose a model already registered in your profile, then choose a reasoning level supported by that model. **Model default** lets the model use its provider default. A model without adjustable reasoning has a disabled reasoning field. Changing a model clears the previous effort. With inheritance selected, workers use the parent's effective model and reasoning, and the reviewer uses the worker selection. Every worker and reviewer still has a separate context, even if they use the same model.
+
+The saved Web orchestrator model applies before a newly active parent's first request and after its model settings change. You can subsequently switch models in the chat. DSH's native selector also updates the default for future chats. Worker/reviewer choices are captured per tool invocation or explicit resume; active and queued tasks in that invocation keep them. **Refresh models** retries discovery without discarding staged settings. An unavailable saved choice remains visible until you replace or clear it.
+
+Context limits accept exact numeric input; sliders move in 1,024-token steps. Zero removes the corresponding global context check, while task budgets, concurrency limits and the model's own context window still apply. **Use two-worker defaults** stages the recommended queue values while preserving your model choices. Press **Save** to persist them.
 
 Save changes only edited fields in one operation. Invalid combinations cannot be saved. If another window has changed the profile, use **Reload** before saving again. Refused or failed saves retain the draft, and outcome messages remain visible after Settings closes.
 
@@ -92,4 +96,4 @@ Add `planOnly: true` when the user requested a plan without execution. An implem
 
 Resume a returned `runId` with the same objective and assignments, adding `resumeContext: { "task-id": "new information" }` or correcting an unfinished task's information packet or budget. The plugin does not retry blindly or silently expand context limits.
 
-For compatibility changes and verification limits, read the [upgrade guide](UPGRADE-1.1.md) and [verification report](VERIFICATION.md).
+For compatibility changes and verification limits, read the [1.2 upgrade guide](UPGRADE-1.2.md), the [1.0 migration guide](UPGRADE-1.1.md) and [verification report](VERIFICATION.md).

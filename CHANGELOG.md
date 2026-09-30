@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — 2026-09-30
+
+- Save independent provider/model/reasoning assignments for orchestrator, workers and final reviewer in Settings.
+- Populate models and supported reasoning levels from DSH's native catalog; retain unavailable saved choices and drafts after discovery failure.
+- Apply Web parent choices through the native Session selector and headless choices through the scoped selector; record actual routing in request headers.
+- Capture worker/reviewer choices per invocation, preserve inheritance and clear inherited effort for explicit model defaults.
+- Preserve model choices when staging two-worker queue defaults; save changed model fields atomically with the existing revision fence.
+- Keep model changes during prompt assembly on the next request and retain isolated contexts, reviewer restrictions and the two-lane queue.
+- See [UPGRADE-1.2.md](UPGRADE-1.2.md) for the volatile `subagentModel` type and native default-model behavior.
+
 ## 1.1.1 — 2026-09-30
 
 - Add profile-backed controls for task/stream concurrency, planning mode, review, context ranges and explicit retry budgets.

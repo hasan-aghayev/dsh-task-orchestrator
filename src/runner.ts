@@ -1,6 +1,6 @@
 /** Execute the parent's saved graph through isolated, disposable children. @module */
 import { randomUUID } from 'node:crypto'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SubagentRun, SubagentStartRequest } from '@deepseek-ai/dsh-subagent'
@@ -42,6 +42,10 @@ export interface RunnerPolicy {
   contextCompactionChars: number
   concurrencyByContext: readonly ContextConcurrencyLimit[]
   subagentModel?: string
+  /** Effective worker route and explicitly owned reasoning captured for this invocation. */
+  workerModel?: ModelSelection
+  /** Effective reviewer route; absence inherits the worker selection. */
+  reviewerModel?: ModelSelection
 }
 
 /** One explicit invocation, with optional missing data for a saved run. */
@@ -228,10 +232,13 @@ export async function runPlan(host: RunnerHost, policy: RunnerPolicy, request: R
       const prompt = promptFor(task)
       state.state = 'ACTIVE'; state.reason = 'running'; state.attempts += 1; result.agentsStarted += 1; save()
       const schema: ObjectJsonSchema = task.role === 'reviewer' ? REVIEW_SCHEMA : { ...WORKER_SCHEMA, properties: { ...WORKER_SCHEMA.properties, taskId: { type: 'string', const: task.id } } }
+      const model = task.role === 'reviewer' ? policy.reviewerModel ?? policy.workerModel : policy.workerModel
       run = await host.start({
         parent: host.parent, signal, label: `${task.owner}: ${task.title}`,
         prompt: [{ type: 'text', text: prompt }], outputSchema: schema,
-        agentOptions: { maxTokens: task.outputReserveTokens!, ...(policy.subagentModel === undefined ? {} : { model: policy.subagentModel }) },
+        agentOptions: { maxTokens: task.outputReserveTokens!, ...(model === undefined
+          ? policy.subagentModel === undefined ? {} : { model: policy.subagentModel }
+          : { ...model, reasoningEffort: model.reasoningEffort }) },
         toolFilter: task.readOnly ? host.readOnlyFilter : host.writeFilter,
       }, task)
       state.childId = run.id; save()

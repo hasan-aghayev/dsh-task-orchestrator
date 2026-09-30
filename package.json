@@ -1,7 +1,7 @@
 {
   "name": "dsh-task-orchestrator",
-  "version": "1.1.1",
-  "description": "TODO-first parent planning with isolated workers, a two-lane local queue, and durable task results.",
+  "version": "1.2.0",
+  "description": "TODO-first orchestration with isolated workers, a two-lane queue, and saved model/reasoning choices for each role.",
   "author": {
     "name": "Hasan Aghayev",
     "email": "hasan.agaev@gmail.com",
@@ -47,6 +47,7 @@
     "README.md",
     "SCENARIO.md",
     "UPGRADE-1.1.md",
+    "UPGRADE-1.2.md",
     "CHANGELOG.md",
     "VERIFICATION.md",
     "SECURITY.md"
@@ -63,7 +64,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-renderer"
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-api-remotes"
       ],
       "platform": "web",
       "external": [
@@ -85,6 +87,7 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-api-session-controller": "^0.2.0-rc.2",
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-agent": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-brand": "^0.2.0-rc.2",
@@ -97,7 +100,12 @@
     "@deepseek-ai/dsh-util-values": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-workflow": "^0.2.0-rc.2"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-api-session-controller": { "optional": true }
+  },
   "devDependencies": {
+    "@deepseek-ai/dsh-api-session-controller": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-remotes": "0.2.0-rc.2",
     "@deepseek-ai/cordis": "4.0.4",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
     "@deepseek-ai/dsh-agent-loop-testkit": "0.2.0-rc.2",

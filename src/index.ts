@@ -4,6 +4,7 @@ import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage, type ContentBlock, type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { parentAgentOptionsForDelegation } from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -13,6 +14,7 @@ import { readPlan, positiveInteger } from './validation.js'
 import { runPlan, OrchestrationRunId, type RunnerPolicy } from './runner.js'
 import { TOOL_PLAN_SCHEMA } from './schemas.js'
 import type { PlannedTask } from './types.js'
+import { ROLE_MODEL_FIELDS, resolveRoleModels, resolveChildModels, installParentModelPolicy, type RoleModelValues } from './model-policy.js'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -47,15 +49,13 @@ const DEFAULT_CONTEXT_CONCURRENCY: readonly ContextConcurrency[] = [
 ]
 
 /** Deployment policy for automatic task orchestration. */
-export interface ConfigValues {
+export interface ConfigValues extends RoleModelValues {
   /** Disable automation, show a plan first, or execute complex requests automatically. */
   mode?: OrchestrationMode
   /** Minimum deterministic complexity score that starts planning. */
   minComplexityScore?: number
   /** Provider used for worker and reviewer children. */
   subagentProvider?: string
-  /** Optional model override for all orchestration children. */
-  subagentModel?: string
   /** Suggested independent initial task count in the planning instruction. */
   preferredWorkers?: number
   /** Hard worker count ceiling accepted from the parent-created graph. */
@@ -110,6 +110,7 @@ export interface ConfigValues {
 export type LiveSetting = 'mode' | 'maxWorkers' | 'maxConcurrentAgents' | 'requireReview'
   | 'maxActiveGenerations' | 'maxChildStarts' | 'maxAttemptsPerTask' | 'concurrencyByContext'
   | 'hardContextTokens' | 'totalContextTokens'
+  | typeof ROLE_MODEL_FIELDS[number]
 
 /** Cordis wraps editable fields in references that expose the latest saved values. */
 export type Config = Omit<ConfigValues, LiveSetting> & {
@@ -121,7 +122,15 @@ export const Config: z<ConfigValues, Config> = z.object({
   mode: z.union(['off', 'suggest', 'hybrid', 'auto']).default('hybrid').volatile(),
   minComplexityScore: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(55),
   subagentProvider: z.string().default('spawn'),
-  subagentModel: z.string(),
+  orchestratorProvider: z.string().default('').volatile(),
+  orchestratorModel: z.string().default('').volatile(),
+  orchestratorReasoningEffort: z.string().default('').volatile(),
+  subagentLlmProvider: z.string().default('').volatile(),
+  subagentModel: z.string().default('').volatile(),
+  subagentReasoningEffort: z.string().default('').volatile(),
+  reviewerProvider: z.string().default('').volatile(),
+  reviewerModel: z.string().default('').volatile(),
+  reviewerReasoningEffort: z.string().default('').volatile(),
   preferredWorkers: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(2),
   maxWorkers: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(6).volatile(),
   maxTotalAgents: z.number().step(1).min(1).max(6).default(6),
@@ -209,7 +218,10 @@ export function apply(ctx: Context, config: Config): void {
     // Values come from the typed Cordis configuration resolver, which wraps only volatile fields.
     return (typeof value === 'object' && value !== null && 'get' in value ? value.get() : value) as NonNullable<ConfigValues[K]>
   }
-  const resolvePolicy = (): RunnerPolicy => {
+  const readModels = () => resolveRoleModels(Object.fromEntries(ROLE_MODEL_FIELDS.map(key => [key, get(key)])))
+  readModels()
+  installParentModelPolicy(ctx, readModels)
+  const resolvePolicy = (parent?: Agent): RunnerPolicy => {
     const maxWorkers = Math.min(get('maxWorkers'), get('maxTotalAgents'))
     const maxConcurrentAgents = get('maxConcurrentAgents')
     const minParallelTasks = get('minParallelTasks')
@@ -221,12 +233,17 @@ export function apply(ctx: Context, config: Config): void {
     if (get('maxChildStarts') < maxWorkers) throw new TypeError('maxChildStarts must cover all logical tasks')
     if (!get('parentOrchestratorOnly')) throw new TypeError('parentOrchestratorOnly must be true; the parent owns planning')
     if (get('readOnlyTools').includes('run_code')) throw new TypeError('readOnlyTools must name end tools, not the PTC transport')
+    const inherited = parent === undefined ? undefined : parentAgentOptionsForDelegation(parent)
+    const models = inherited?.provider && inherited.model ? resolveChildModels(readModels(), {
+      provider: inherited.provider, model: inherited.model,
+      ...(inherited.reasoningEffort === undefined ? {} : { reasoningEffort: inherited.reasoningEffort }),
+    }) : undefined
     return {
       maxWorkers, minParallelTasks, maxConcurrentAgents, maxChildStarts: get('maxChildStarts'), maxAttemptsPerTask: get('maxAttemptsPerTask'),
       allowWrites: get('allowWrites'), allowParallelWrites: get('allowParallelWrites'), requireReview: get('requireReview'),
       maxHandoffChars: get('maxHandoffChars'), contextCompactionChars: get('contextCompactionChars'),
       concurrencyByContext,
-      ...(config.subagentModel === undefined ? {} : { subagentModel: config.subagentModel }),
+      ...(models === undefined ? {} : { workerModel: models.worker, reviewerModel: models.reviewer }),
     }
   }
   resolvePolicy()
@@ -293,7 +310,7 @@ export function apply(ctx: Context, config: Config): void {
       const objective = args.objective.trim()
       if (objective.length === 0 || objective.length > get('maxHandoffChars')) throw new TypeError('objective must fit maxHandoffChars and be non-empty')
       const plan = readPlan(args.plan, get('maxHandoffChars'))
-      const policy = resolvePolicy()
+      const policy = resolvePolicy(parent)
       const maxWorkers = policy.maxWorkers
       const requestedCap = args.maxWorkers === undefined ? maxWorkers : positiveInteger(args.maxWorkers, 'maxWorkers')
       if (requestedCap > maxWorkers) throw new TypeError('maxWorkers exceeds the deployment ceiling')

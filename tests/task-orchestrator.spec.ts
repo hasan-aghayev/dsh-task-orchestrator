@@ -50,6 +50,7 @@ describe('DSH Task Orchestrator', () => {
     expect(Config.dict?.totalContextTokens?.meta.volatile).toBe(true)
     for (const field of ['mode', 'maxWorkers', 'maxConcurrentAgents', 'requireReview', 'maxActiveGenerations', 'maxChildStarts', 'maxAttemptsPerTask', 'concurrencyByContext']) expect(Config.dict?.[field]?.meta.volatile).toBe(true)
     expect(Config.dict?.allowWrites?.meta.volatile).toBeUndefined()
+    for (const field of ['orchestratorProvider', 'orchestratorModel', 'orchestratorReasoningEffort', 'subagentLlmProvider', 'subagentModel', 'subagentReasoningEffort', 'reviewerProvider', 'reviewerModel', 'reviewerReasoningEffort']) expect(Config.dict?.[field]?.meta.volatile).toBe(true)
   })
 
   it('selects the smallest supported context tier through the 150K ceiling', () => {

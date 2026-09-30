@@ -6,6 +6,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { ContextSettingsPage } from './ContextSettingsPage.js'
 import type { ContextSettingsInjected, TaskOrchestratorSettings } from './ContextSettingsPage.js'
 import { en, zh, type ContextSettingsLocaleKey } from './locales.js'
@@ -22,7 +23,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Client services required by the Settings section and its form. */
-export const inject = ['slots', 'locale', 'configForms']
+export const inject = ['slots', 'locale', 'configForms', 'remote']
 
 /**
  * Register the Settings navigation entry while this plugin is enabled.
@@ -33,7 +34,12 @@ export function apply(ctx: Context): void {
   const form = ctx.configForms.get<TaskOrchestratorSettings>('task-orchestrator')
   const notices = new SettingsNotices()
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'task-orchestrator settings dictionaries')
-  const injected = (): ContextSettingsInjected => ({ form, notify: notices.publish })
+  const loadModels: ContextSettingsInjected['loadModels'] = async () => {
+    const response = await ctx.remote.session.modelCatalog()
+    if (!response.ok) throw new Error(response.error.message)
+    return response.value
+  }
+  const injected = (): ContextSettingsInjected => ({ form, notify: notices.publish, loadModels })
   ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'task-orchestrator',
