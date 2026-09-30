@@ -1,10 +1,8 @@
 import { readFileSync } from 'node:fs'
-import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { Config, scoreComplexity } from '../src/index.ts'
 import { ResourceManager, estimateInputTokens } from '../src/resource-manager.ts'
-import { CONTEXT_TIERS, buildAdaptivePlan, estimateTaskBudget, packReadyTasks, selectContextTier } from '../src/adaptive.ts'
-import { createOrchestrationScript } from '../src/orchestration-script.ts'
+import { CONTEXT_TIERS, estimateTaskBudget, packReadyTasks, selectContextTier } from '../src/adaptive.ts'
 
 describe('DSH Task Orchestrator', () => {
   it('declares DSH 0.2.0-rc.2 compatibility for every required runtime package', () => {
@@ -26,7 +24,7 @@ describe('DSH Task Orchestrator', () => {
     }
     expect(manifest.dependencies['@deepseek-ai/schemastery']).toBe('^3.18.4')
     expect(manifest).not.toHaveProperty('packageManager')
-    expect(manifest.scripts.prepare).toBe('tsc -p tsconfig.json')
+    expect(manifest.scripts.prepare).toBe('pnpm build')
   })
 
   it('does not delegate a short, single-purpose request', () => {
@@ -43,15 +41,24 @@ describe('DSH Task Orchestrator', () => {
 
   it('keeps default context concurrency within the default global ceiling', () => {
     const defaults = Config({})
-    expect(defaults.maxActiveGenerations).toBe(2)
-    expect(defaults.concurrencyByContext?.every(tier => tier.maxActiveGenerations <= (defaults.maxActiveGenerations ?? 0))).toBe(true)
+    expect(defaults.maxActiveGenerations.get()).toBe(2)
+    expect(defaults.concurrencyByContext.get().every(tier => tier.maxActiveGenerations <= defaults.maxActiveGenerations.get())).toBe(true)
   })
 
-  it('selects the smallest supported context tier through the 96K ceiling', () => {
+  it('exposes queue and context settings without granting live edits to write permissions', () => {
+    expect(Config.dict?.hardContextTokens?.meta.volatile).toBe(true)
+    expect(Config.dict?.totalContextTokens?.meta.volatile).toBe(true)
+    for (const field of ['mode', 'maxWorkers', 'maxConcurrentAgents', 'requireReview', 'maxActiveGenerations', 'maxChildStarts', 'maxAttemptsPerTask', 'concurrencyByContext']) expect(Config.dict?.[field]?.meta.volatile).toBe(true)
+    expect(Config.dict?.allowWrites?.meta.volatile).toBeUndefined()
+  })
+
+  it('selects the smallest supported context tier through the 150K ceiling', () => {
     expect(selectContextTier(8_193)).toBe(16_384)
     expect(selectContextTier(65_537)).toBe(81_920)
-    expect(selectContextTier(98_305)).toBeUndefined()
-    expect(CONTEXT_TIERS).toEqual([8_192, 16_384, 24_576, 32_768, 49_152, 65_536, 81_920, 98_304])
+    expect(selectContextTier(98_305)).toBe(99_328)
+    expect(selectContextTier(149_505)).toBe(150_000)
+    expect(CONTEXT_TIERS.slice(0, 8)).toEqual([8_192, 16_384, 24_576, 32_768, 49_152, 65_536, 81_920, 98_304])
+    expect(CONTEXT_TIERS.at(-1)).toBe(150_000)
   })
 
   it('packs only the largest safe ready tasks into the available generation budget', () => {
@@ -63,14 +70,6 @@ describe('DSH Task Orchestrator', () => {
     const result = packReadyTasks([task('large', 24_576), task('small-a', 8_192), task('small-b', 8_192)], { maxWorkers: 6, maxActiveGenerations: 2, totalContextTokens: 32_768, safetyReserveTokens: 0 })
     expect(result.selected.map(item => item.task.id)).toEqual(['large', 'small-a'])
     expect(result.deferred.map(item => item.task.id)).toEqual(['small-b'])
-  })
-
-  it('builds a minimal parent plan with a reviewer inside the worker ceiling', () => {
-    const plan = buildAdaptivePlan('Исследуй API, добавь тесты и документацию.', 3, 6, true)
-    expect(plan.tasks.length).toBe(5)
-    expect(plan.tasks.at(-1)?.role).toBe('reviewer')
-    expect(plan.tasks.at(-1)?.dependsOn).toEqual(plan.tasks.slice(0, -1).map(task => task.id))
-    expect(plan.tasks.every(task => task.taskPackage?.taskId === task.id)).toBe(true)
   })
 
   it('estimates prompt and tool text for the hard request limit', () => {
@@ -87,6 +86,28 @@ describe('DSH Task Orchestrator', () => {
     expect(() => manager.stream(context, {
       provider: 'test', model: 'test', messages: [{ id: 'm', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'a'.repeat(100) }] }],
     } as never, async function* () { yield { type: 'finish', reason: { kind: 'stop' } } })).toThrow(/exceeds hard context limit/)
+  })
+
+  it('uses updated context limits for streams created after settings change', () => {
+    let hardContextTokens = 1_000
+    let totalContextTokens = 1_000
+    const manager = new ResourceManager({
+      maxActiveGenerations: 1,
+      hardContextTokens: () => hardContextTokens,
+      totalContextTokens: () => totalContextTokens,
+      safetyReserveTokens: 1,
+    })
+    const context = { agents: { get: () => undefined } } as never
+    const options = {
+      provider: 'test', model: 'test', messages: [{ id: 'm', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'a'.repeat(400) }] }],
+    } as never
+    const next = async function* () { yield { type: 'finish', reason: { kind: 'stop' } } }
+
+    hardContextTokens = 50
+    expect(() => manager.stream(context, options, next)).toThrow(/exceeds hard context limit/)
+    hardContextTokens = estimateInputTokens(options)
+    totalContextTokens = hardContextTokens
+    expect(() => manager.stream(context, options, next)).toThrow(/exceeds total context budget/)
   })
 
   it('limits consumed streams to the configured active lanes', async () => {
@@ -132,132 +153,6 @@ describe('DSH Task Orchestrator', () => {
     expect(manager.activeContextBudget).toBe(0)
   })
 
-  it('refills a free worker slot before the slow sibling settles', async () => {
-    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
-    const tasks = ['one', 'two', 'three', 'four'].map((id) => ({
-      id,
-      title: id,
-      role: 'researcher' as const,
-      prompt: id,
-      dependsOn: [],
-      readOnly: true,
-      writeScopes: [],
-      contextBudget: 8_192 as const,
-      outputReserveTokens: 0,
-      safetyReserveTokens: 0,
-      taskPackage: { taskId: id, goal: id, relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: id, doNot: [] },
-    }))
-    const started = new Map<string, number>()
-    const finished = new Map<string, number>()
-    const context = {
-      args: { objective: 'Run independent checks.', planOnly: false, allowWrites: false, allowParallelWrites: false, maxWorkers: 6, maxConcurrentAgents: 2, maxHandoffChars: 16_384, totalContextTokens: 98_304, plan: { summary: 'Dynamic queue.', risk: 'low', requiresConfirmation: false, tasks } },
-      phase: (): void => undefined,
-      parallel: async (): Promise<never> => { throw new Error('legacy batch parallelism was used') },
-      agent: async (_prompt: string, options: { label: string }): Promise<unknown> => {
-        const id = options.label.split(': ').at(-1) as string
-        started.set(id, Date.now())
-        const delay = id === 'one' ? 20 : id === 'two' ? 100 : 5
-        await new Promise<void>((resolve) => setTimeout(resolve, delay))
-        finished.set(id, Date.now())
-        return { taskId: id, status: 'completed', summary: id, evidence: [], changedFiles: [], tests: [], blockers: [], nextSteps: [] }
-      },
-      setTimeout,
-    }
-    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string; agentsStarted: number; workers: Array<{ status: string }> }>
-    expect(result.status).toBe('completed')
-    expect(result.agentsStarted).toBe(4)
-    expect(result.workers).toHaveLength(4)
-    expect(started.get('three')).toBeLessThan(finished.get('two') ?? Number.POSITIVE_INFINITY)
-  })
-
-  it('starts with the preferred workers and expands a small-context plan after results', async () => {
-    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
-    const tasks = Array.from({ length: 6 }, (_, index) => {
-      const id = `worker-${index + 1}`
-      return {
-        id,
-        title: id,
-        role: 'researcher' as const,
-        prompt: id,
-        dependsOn: [],
-        readOnly: true,
-        writeScopes: [],
-        contextBudget: 8_192 as const,
-        outputReserveTokens: 0,
-        safetyReserveTokens: 0,
-        taskPackage: { taskId: id, goal: id, relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: id, doNot: [] },
-      }
-    })
-    const started: string[] = []
-    let active = 0
-    let peak = 0
-    const context = {
-      args: {
-        objective: 'Run independent checks.',
-        planOnly: false,
-        allowWrites: false,
-        allowParallelWrites: false,
-        preferredWorkers: 2,
-        maxWorkers: 6,
-        maxConcurrentAgents: 6,
-        concurrencyByContext: [{ maxContextTokens: 8_192, maxActiveGenerations: 6 }],
-        contextCompactionChars: 512,
-        maxHandoffChars: 16_384,
-        totalContextTokens: 98_304,
-        plan: { summary: 'Dynamic queue.', risk: 'low', requiresConfirmation: false, tasks },
-      },
-      phase: (): void => undefined,
-      agent: async (_prompt: string, options: { label: string }): Promise<unknown> => {
-        const id = options.label.split(': ').at(-1) as string
-        started.push(id)
-        active += 1
-        peak = Math.max(peak, active)
-        await new Promise<void>(resolve => setTimeout(resolve, id === 'worker-1' || id === 'worker-2' ? 10 : 30))
-        active -= 1
-        return { taskId: id, status: 'completed', summary: id, evidence: [], changedFiles: [], tests: [], blockers: [], nextSteps: [] }
-      },
-    }
-    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string; agentsStarted: number; workers: Array<{ status: string }> }>
-    expect(result.status).toBe('completed')
-    expect(result.agentsStarted).toBe(6)
-    expect(result.workers).toHaveLength(6)
-    expect(started.slice(0, 2)).toEqual(['worker-1', 'worker-2'])
-    expect(peak).toBeGreaterThan(2)
-  })
-
-  it('compacts dependency reports before handing them to a later worker', async () => {
-    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
-    const tasks = [
-      {
-        id: 'source', title: 'source', role: 'researcher' as const, prompt: 'source', dependsOn: [], readOnly: true, writeScopes: [], contextBudget: 8_192 as const, outputReserveTokens: 0, safetyReserveTokens: 0,
-        taskPackage: { taskId: 'source', goal: 'source', relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: [], expectedOutput: 'source', doNot: [] },
-      },
-      {
-        id: 'consumer', title: 'consumer', role: 'tester' as const, prompt: 'consumer', dependsOn: ['source'], readOnly: true, writeScopes: [], contextBudget: 8_192 as const, outputReserveTokens: 0, safetyReserveTokens: 0,
-        taskPackage: { taskId: 'consumer', goal: 'consumer', relevantContext: [], constraints: [], knownFacts: [], files: [], dependencies: ['source'], expectedOutput: 'consumer', doNot: [] },
-      },
-    ]
-    let consumerPrompt = ''
-    const context = {
-      args: {
-        objective: 'Run dependent checks.', planOnly: false, allowWrites: false, allowParallelWrites: false,
-        preferredWorkers: 2, maxWorkers: 2, maxConcurrentAgents: 2, contextCompactionChars: 512,
-        maxHandoffChars: 16_384, totalContextTokens: 98_304,
-        plan: { summary: 'Compaction.', risk: 'low', requiresConfirmation: false, tasks },
-      },
-      phase: (): void => undefined,
-      agent: async (prompt: string, options: { label: string }): Promise<unknown> => {
-        const id = options.label.split(': ').at(-1) as string
-        if (id === 'consumer') consumerPrompt = prompt
-        return { taskId: id, status: 'completed', summary: id, evidence: [id === 'source' ? 'x'.repeat(5_000) : 'ok'], changedFiles: [], tests: [], blockers: [], nextSteps: [] }
-      },
-    }
-    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string }>
-    expect(result.status).toBe('completed')
-    expect(consumerPrompt).toContain('[compacted]')
-    expect(consumerPrompt.length).toBeLessThan(4_000)
-  })
-
   it('removes an aborted request that is waiting for a lane', async () => {
     const manager = new ResourceManager({ maxActiveGenerations: 1, hardContextTokens: 1000 })
     const context = { agents: { get: () => undefined } } as never
@@ -286,14 +181,14 @@ describe('DSH Task Orchestrator', () => {
   })
 
   it('enables the workflow engine required by the bundle', () => {
-    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
     expect(patch).toContain('id: task-orchestrator-workflow')
     expect(patch).toContain("name: '@deepseek-ai/dsh-workflow-ptc'")
     expect(patch).toContain('provider: spawn')
   })
 
   it('owns the model-facing delegation tools in one disableable group', () => {
-    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
     expect(patch).toContain('- id: task-orchestrator-suite')
     expect(patch).toContain('name: cordis:group')
     expect(patch).toContain('workflowEngine: true')
@@ -313,64 +208,5 @@ describe('DSH Task Orchestrator', () => {
     }
   })
 
-  it('admits a worker in the workflow script with the configured batch budget', async () => {
-    const script = createOrchestrationScript({ plan: {}, worker: {}, review: {} })
-    const context = {
-      args: {
-        objective: 'Read the plugin package manifest.',
-        planOnly: false,
-        allowWrites: false,
-        allowParallelWrites: false,
-        maxWorkers: 1,
-        maxConcurrentAgents: 2,
-        maxHandoffChars: 16_384,
-        totalContextTokens: 98_304,
-        plan: {
-          summary: 'Compatibility check.',
-          risk: 'low',
-          requiresConfirmation: false,
-          tasks: [{
-            id: 'compat-read',
-            title: 'Read package manifest',
-            role: 'researcher',
-            prompt: 'Read package.json and report its peer versions.',
-            dependsOn: [],
-            readOnly: true,
-            writeScopes: [],
-            contextBudget: 24_576,
-            outputReserveTokens: 2_048,
-            safetyReserveTokens: 1_024,
-            taskPackage: {
-              taskId: 'compat-read',
-              goal: 'Read the plugin package manifest.',
-              relevantContext: [],
-              constraints: [],
-              knownFacts: [],
-              files: ['package.json'],
-              dependencies: [],
-              expectedOutput: 'A structured report.',
-              doNot: [],
-            },
-          }],
-        },
-      },
-      phase: (): void => undefined,
-      parallel: async (thunks: Array<() => Promise<unknown>>): Promise<unknown[]> => Promise.all(thunks.map(thunk => thunk())),
-      agent: async (): Promise<unknown> => ({
-        taskId: 'compat-read',
-        status: 'completed',
-        summary: 'Peer versions are compatible.',
-        evidence: ['The profile uses versions accepted by the plugin.'],
-        changedFiles: [],
-        tests: ['workflow script admission'],
-        blockers: [],
-        nextSteps: [],
-      }),
-    }
-    const result = await runInNewContext(`(async () => {\n${script}\n})()`, context) as Promise<{ status: string; agentsStarted: number; workers: Array<{ status: string }> }>
-    expect(result.status).toBe('completed')
-    expect(result.agentsStarted).toBe(1)
-    expect(result.workers).toHaveLength(1)
-    expect(result.workers[0]?.status).toBe('completed')
-  })
+
 })

@@ -11,10 +11,11 @@
     "skipLibCheck": true,
     "declaration": true,
     "declarationMap": true,
+    "jsx": "react-jsx",
     "sourceMap": true,
     "rootDir": "src",
     "outDir": "lib",
     "declarationDir": "lib/types"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

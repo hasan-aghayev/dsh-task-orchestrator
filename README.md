@@ -1,118 +1,98 @@
 # DSH Task Orchestrator
 
-Adaptive delegation for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The parent model remains the only orchestrator: it creates or validates a small dependency graph, selects the minimum useful number of workers, packs them by context budget, and may assign review to one ordinary worker slot.
+[Usage guide](SCENARIO.md) · [Upgrade guide](UPGRADE-1.1.md) · [Release verification](VERIFICATION.md)
 
-Author: Hasan Aghayev  
-License: MIT
+The parent model writes and assigns a TODO plan before starting isolated workers. Independent work uses up to two model streams by default; additional tasks wait in a dependency-aware queue. The parent receives structured results, missing-data requests and a final review. Short questions use the ordinary single-agent path.
 
-## Install
+Author: Hasan Aghayev · License: MIT
 
-Install the public GitHub package into a DSH profile:
+## Execution
+
+1. For substantial work, the parent supplies an explicit `plan` to `task_orchestrate`. Every task has a unique `id` and `owner`, a goal, role, dependencies and read/write policy. At least two initial worker tasks must be independent. A required reviewer depends on every worker and occupies an ordinary task slot.
+2. The plugin validates the complete graph and writes native TODO before creating the first child. Short questions need no team. The complexity detector adds planning instructions; it never constructs or executes a graph from keywords.
+3. Ready tasks run through fresh `spawn` contexts. Children receive only their assigned packet, compacted dependency reports and any explicitly supplied additional data. Read-only children receive a real tool allow-list. Output reserves become the child's `maxTokens` setting.
+4. At most two logical children run at once by default. One child's settlement immediately opens a slot for the next ready task. A separate shared scheduler counts actual model streams, including the parent. Limits of both incoming and already active requests apply. Large contexts may run alone. Aged waiting requests can reserve capacity so smaller newcomers do not indefinitely bypass them.
+5. Each native `todo/write` snapshot contains the TODO list plus versioned plugin checkpoint metadata. The checkpoint retains assignments, attempts, child identities, reports and reasons. Completed tasks remain completed when resuming; a crash-interrupted child is marked waiting and is not duplicated if still live.
+6. `NEED_FILE`, `NEED_HISTORY`, `NEED_BUDGET` and other needs return to the parent. No automatic retry occurs without new data or an explicitly corrected unfinished task packet/budget. A run becomes completed only when every task succeeds and required review approves it.
+
+## Installation
+
+Version 1.1.1 targets the DSH 0.2 API line and is tested against `0.2.0-rc.2`. Install the versioned release package into a DSH profile:
+
+```sh
+dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator/releases/download/v1.1.1/dsh-task-orchestrator-1.1.1.tgz
+```
+
+Use your profile name in place of `web`. The same command accepts a locally built tarball. To install the latest source from the default branch, use:
 
 ```sh
 dsh plugin --profile web add https://github.com/hasan-aghayev/dsh-task-orchestrator.git
 ```
 
-GitHub installs compile the package with its declared TypeScript dependency during preparation. The published manifest leaves pnpm selection to the DSH profile so the install uses the package manager provided by that DSH runtime.
+`cordis.patch.yml` supplies the `task-orchestrator-suite` group and companion delegation tools. The orchestrator uses the subagent service directly; the companion workflow component is not its execution engine. Configuration and component enablement remain owned by the profile. Enable the suite and orchestrator in Plugins if they are disabled. Restart DSH after updating the installed package so the Host loads the new configuration fields.
 
-The package declares a `dsh.bundle` manifest in `package.json`, so the command can discover and apply `cordis.patch.yml` automatically. Its bundle installs one package-owned delegation group containing the workflow engine and the model-facing surface: `subagent`, `subagent_fork`, `send_message`, `interrupt_agent`, and `list_agents`. It does not enable DSH's separate model-facing `workflow` tool. The standard web-profile rows stay disabled, so disabling this plugin in DSH Market disables the group and all of these tools together. Remove it with:
-
-```sh
-dsh plugin --profile web remove dsh-task-orchestrator
-```
-
-Restart the profile after installation if it is already running.
-
-## What it does
-
-The plugin adds the `task_orchestrate` tool and enables the standard DSH delegation tools. A simple request stays on the normal path. A complex request is scored with a deterministic detector and then sent through these stages:
-
-1. The parent orchestrator supplies a strict JSON plan, or the plugin creates a minimal deterministic graph without a planner child.
-2. Each worker receives only an explicit `TASK`, `GOAL`, `RELEVANT CONTEXT`, `CONSTRAINTS`, `KNOWN FACTS`, `FILES / CODE`, `DEPENDENCIES`, `EXPECTED OUTPUT`, and `DO NOT` packet.
-3. The scheduler starts a role only after its dependencies complete. Independent read-only roles are admitted incrementally by context tier and active-generation limits; when one role settles, the next fitting role can start without waiting for its sibling.
-4. Workers return structured evidence, changed files, tests, blockers, next steps, and can request `NEED_FILE`, `NEED_HISTORY`, `NEED_MORE_CONTEXT`, `NEED_DEPENDENCY`, `NEED_BUDGET`, or `NEED_TOOL_RESULT`. Dependency reports are compacted to bounded facts before they are handed to another worker or reused for a context escalation; only `NEED_MORE_CONTEXT` triggers one bounded context escalation.
-5. A task with role `reviewer` is an ordinary worker and produces the final review fields; no seventh child is created.
-
-Supported roles are `researcher`, `architect`, `backend`, `frontend`, `tester`, `documentation`, and `reviewer`. The plugin uses the existing DSH subagent and workflow services and does not modify the agent loop.
-
-The model can also call `subagent` for a fresh child, `subagent_fork` for a child that inherits completed parent turns, and `list_agents`, `send_message`, or `interrupt_agent` to manage continuable children. These tools are package-owned group children rather than edits to the base rows. That ownership makes the Market toggle atomic: plugin off means the group and all five model-facing tools are off, while the web profile's standard rows remain off as well.
-
-## Safe defaults
-
-The default mode is `hybrid`:
-
-- simple requests do not start child agents;
-- complex read-only requests can run automatically;
-- plans that require writes stop at `plan-only` until a human approves them;
-- writes and parallel writes are disabled by default;
-- workers require a fresh structured-output subagent provider;
-- at most six workers can exist in one orchestration; the parent is not counted as a child, so the logical maximum is one parent plus six workers;
-- oversized plans, reports, and parent notices are rejected or truncated at configured limits.
-
-Automatic write execution should be enabled only in a profile that has its own approval and workspace policy:
+## Configuration
 
 ```yaml
 config:
   mode: hybrid
-  minComplexityScore: 55
   subagentProvider: spawn
+  minParallelTasks: 2
   preferredWorkers: 2
   maxWorkers: 6
   maxTotalAgents: 6
   maxConcurrentAgents: 2
+  maxActiveGenerations: 2
+  maxChildStarts: 12
+  maxAttemptsPerTask: 2
+  requireReview: true
   allowWrites: false
   allowParallelWrites: false
-  requireReview: true
-  maxActiveGenerations: 2
-  hardContextTokens: 98304
-  priorityAgingMs: 30000
+  hardContextTokens: 65536
   totalContextTokens: 98304
   contextCompactionChars: 4096
-  concurrencyByContext:
-    - { maxContextTokens: 8192, maxActiveGenerations: 2 }
-    - { maxContextTokens: 16384, maxActiveGenerations: 2 }
-    - { maxContextTokens: 24576, maxActiveGenerations: 2 }
-    - { maxContextTokens: 32768, maxActiveGenerations: 2 }
-    - { maxContextTokens: 49152, maxActiveGenerations: 2 }
-    - { maxContextTokens: 65536, maxActiveGenerations: 1 }
-    - { maxContextTokens: 81920, maxActiveGenerations: 1 }
-    - { maxContextTokens: 98304, maxActiveGenerations: 1 }
-  minimumVramHeadroomGiB: 0.8
-  parentOrchestratorOnly: true
+  maxPlanningReminders: 2
+  scheduledProviders: []
 ```
 
-The `suggest` mode always returns a plan first. `off` disables automatic planning but keeps the explicit tool. `auto` is available for deployments that intentionally permit automatic execution.
+`maxWorkers` and `maxTotalAgents` cap logical tasks, including review. `maxChildStarts` separately caps starts and explicit retries. `preferredWorkers` is planning guidance; `minParallelTasks` validates the independent initial task count. Different useful outputs are the parent's responsibility.
 
-`maxActiveGenerations` is the deployment ceiling. `concurrencyByContext` can lower it for large requests, so a small worker may use more lanes on hardware that passes the corresponding benchmark. On the current RTX 3090 profile every small-worker tier is intentionally set to two and the larger tiers to one: NInfer failed its startup memory reservation at three and six, so the profile does not claim unsafe parallelism. A stream holds a lane only while its output is consumed; an agent waiting for tools or children does not hold one. Completed streams release their context budget immediately, so a queued worker can replace them while another active worker continues. The parent orchestrator starts with `preferredWorkers`, then admits additional ready workers as results free capacity, up to six. `contextCompactionChars` bounds dependency reports before escalation or handoff. `priorityAgingMs` raises a waiting request by one priority level after the configured interval, so a long-running worker cannot wait forever. `hardContextTokens` is a conservative pre-tokenization guard; NInfer remains authoritative for exact token counts. `totalContextTokens` is a conservative active-work budget, not a promise that requests fit concurrently in GPU memory. `minimumVramHeadroomGiB` documents the safety target used when selecting a deployment profile.
+The default `concurrencyByContext` permits two streams through 49,152 estimated input tokens and one above that size, through 150,000. The smallest active request's concurrency ceiling also applies to newcomers. `hardContextTokens` guards estimated input; `totalContextTokens` counts estimated input, reserved output and safety across active streams. Each local orchestration child additionally has its assigned whole-request `contextBudget`. When request options omit maxTokens, defaultOutputReserveTokens reserves 2,048 output tokens; requestSafetyReserveTokens reserves 1,024 additional tokens for requests without a task-specific reserve. These estimates do not measure VRAM or replace the provider's tokenizer.
 
-The package defaults are conservative (`maxActiveGenerations: 2` and two lanes for small requests). To test higher small-worker concurrency, raise the global ceiling and provide matching `concurrencyByContext` entries in the deployment profile only after a benchmark on that hardware.
+An empty `scheduledProviders` list schedules every LLM route in this process. Set it to the local provider's registered name to keep cloud routes outside the local shared queue. Children still retain their task-level output limit. Hard child context checks require in-process `spawn` execution; a remote runtime needs its own corresponding resource policy.
 
-The `task_orchestrate` tool accepts `objective`, optional parent-created `plan`, optional `planOnly`, optional `executeWrites`, and an optional `maxWorkers` cap. A request-side cap can never exceed the configured deployment ceiling.
+`mode: off` disables automatic planning instructions and guards but retains the explicit tool. `suggest` asks for a saved plan first; existing human authorization permits execution. `hybrid` and `auto` instruct the parent to plan and execute substantial work within existing authorization. Plans requesting confirmation, and unauthorized write tasks, return `plan-only`. A bounded reminder policy reports failure if a required plan is never saved.
 
-## Development
+The web **Settings → Task Orchestrator** page edits planning mode, active task slots, logical task count, final review, shared model streams and both context budgets. Advanced controls edit context/concurrency ranges, total child starts and starts per task. Numeric context inputs preserve exact saved values; sliders use 1,024-token steps. Zero disables that global context check, while task budgets and concurrency limits still apply. Conflicting combinations disable Save. The defaults action stages the two-worker settings without saving them automatically.
+
+One atomic, revision-fenced Save changes only edited fields in the profile. A refusal keeps the draft; a newer Host revision requires Reload. Outcome notices live in the shell and survive closing Settings. New task runs snapshot their execution policy; active runs keep that policy. Model streams read current request limits. Queued requests honor the latest shared/global limits and tighter context ceilings; lowering a limit does not cancel active streams. Updating the installed plugin package requires restarting DSH to load the new Host schema.
+
+## Tool fields
+
+`task_orchestrate` requires `objective` and `plan`. A plan contains `summary`, `risk` (`low`, `medium` or `high`), `requiresConfirmation` and `tasks`. Optional tool fields are `planOnly`, `executeWrites`, `maxWorkers`, `runId` and `resumeContext`. `executeWrites` must reflect existing human authorization, not create it. See the [complete read-only example](SCENARIO.md#example-plan).
+
+Every plan task requires `id`, `title`, `owner`, `role`, `prompt`, `dependsOn`, `readOnly` and `writeScopes`. Optional `taskPackage` carries relevant context, facts, files, constraints and expected output. Defaults are `contextBudget: 24576`, `outputReserveTokens: 2048`, `safetyReserveTokens: 1024`. Supported roles: researcher, architect, backend, frontend, tester, documentation, reviewer.
+
+Resume the returned `runId` with `resumeContext: { taskId: "new information" }`. You may also revise the budget or packet of an unfinished task. Assignment, goal, dependencies and write permissions must stay identical; completed task inputs cannot change while reusing their evidence. A task blocked solely by dependencies becomes ready after they succeed. Partial results remain recorded on errors and cancellation.
+
+Native TODO uses its three statuses: queued/waiting/failed tasks remain pending with a reason, active tasks are in progress, successful tasks are completed. Full task states and reports live in the same saved event. Parent-facing text and complete dependency excerpts are bounded by configuration; full checkpoint data remains available in the session log.
+
+## Development and verification
 
 ```sh
-pnpm install
-pnpm check
-pnpm test
-pnpm build
+corepack pnpm@12.4.1 install --frozen-lockfile
+corepack pnpm@12.4.1 check
+corepack pnpm@12.4.1 test
+corepack pnpm@12.4.1 build
+corepack pnpm@12.4.1 pack
 ```
 
-The package emits JavaScript to `lib/` and declaration files to `lib/types/`. The published package contains only the built runtime, declarations, bundle patch, and paired READMEs.
+The development and CI environment uses Node.js 24 and pnpm 12.4.1. Runtime requires Node.js 22.19 or later. The package does not pin the profile's package manager; DSH manages profile installation.
 
-## Compatibility
+Tests control child settlement with barriers and exercise the shipped DSH production loop, real spawn provider, native TODO and a scripted model adapter. They verify context isolation, two active lanes, queue refill, read-only denial, output limits, hard task-budget rejection, missing-data resume, interrupted-run recovery, cancellation and reviewer approval. The scripted adapter does not establish a real local model's reliability or hardware throughput.
 
-Version 1.0.8 supports the previously declared DSH 0.1.x versions and DeepSeek Harness `0.2.0-rc.2` or later releases in the `0.2.x` line. Version 1.0.7 and earlier do not declare support for DSH 0.2.x. Version 1.0.8 was type-checked and tested against the DSH `0.2.0-rc.2` package APIs, Cordis `4.0.4`, and Schemastery `3.18.4` with Node `24.18.0`.
+Host JavaScript and the browser settings module are built into `lib/`; declarations are in `lib/types/`. The [verification report](VERIFICATION.md) records the checks and their limits. Read [the upgrade guide](UPGRADE-1.1.md) before replacing a 1.0.x installation.
 
-## Limitations
+## Limits
 
-- Workers share the profile workspace. Parallel writes remain disabled by default and the plugin does not create automatic git worktrees.
-- Complexity detection uses lexical signals and may miss a short difficult request or classify a long simple request as complex.
-- NInfer does not force arbitrary JSON output by itself. DSH validates plan and worker fields after each model response, but that validation does not replace human review.
-- Write scopes are declared to the scheduler and worker prompts; the surrounding DSH profile remains responsible for filesystem permissions and approval policy.
-- Context tiers are 8K, 16K, 24K, 32K, 49K, 65K, 81K and 96K. The local profile keeps the shared budget at 98,304 tokens and applies a two-stream safety ceiling after the RTX 3090 reservation benchmark; higher per-tier concurrency values require a separate hardware benchmark.
-- Compaction is deterministic and bounded. It preserves the report fields needed for scheduling and review, but it is not a semantic summary and does not prove that NInfer restored a KV cache after a restart.
-
-## Repository
-
-Source: <https://github.com/hasan-aghayev/dsh-task-orchestrator>
+Workers share a workspace; the plugin does not create worktrees. Declared write scopes prevent overlapping declared writers and guide prompts, while filesystem permissions remain the profile's responsibility. Parallel writes are disabled by default. Read-only enforcement depends on the configured read-tool allow-list. The lexical detector can miss a short difficult request; the parent can explicitly invoke the tool. Report compaction is bounded text, not a semantic summary. The plugin does not monitor GPU memory.

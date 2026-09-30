@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1 — 2026-09-30
+
+- Add profile-backed controls for task/stream concurrency, planning mode, review, context ranges and explicit retry budgets.
+- Preserve exact token counts, stage defaults, validate related fields, and save edited fields atomically with a revision fence.
+- Keep Settings notices in the shell, keep drafts after refusal and use the shared DSH controls in both themes.
+- Snapshot execution policy for each run; apply tighter queue admission limits without cancelling active model streams.
+- Verify form save/refusal/conflict states, live mode changes, queue limit changes and responsive rendering.
+- Require the parent-assigned plan and save native TODO/checkpoint before worker startup.
+- Validate two independent initial tasks and mandatory final review.
+- Use isolated subagent execution with actual output limits and read-only tool restrictions.
+- Fix active-context admission symmetry, refill all free model lanes and preserve numeric budget diagnostics.
+- Preserve partial reports, explicit missing-data resume and interrupted-run recovery; separate tasks from retry budgets.
+- Pin worker output schemas and decoded reports to the parent's assigned task identity.
+- Use English release documentation, status summaries and TODO reasons.
+- Align CI with Node.js 24 and pnpm 12.4.1 for reproducible frozen-lockfile installs.
+- See [UPGRADE-1.1.md](UPGRADE-1.1.md) for changed tool fields, configuration types and DSH compatibility.
+
 ## 1.0.8 — 2026-09-30
 
 - Add peer ranges for DeepSeek Harness 0.2.0-rc.2 while retaining the previously supported 0.1.x ranges.

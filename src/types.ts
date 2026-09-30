@@ -1,3 +1,5 @@
+import type { SessionId } from '@deepseek-ai/dsh-session'
+
 /** Roles that the parent orchestrator may assign to worker agents. */
 export const TASK_ROLES = [
   'researcher',
@@ -25,13 +27,15 @@ export type ReviewStatus = 'approved' | 'changes_requested' | 'blocked' | 'faile
 export interface PlannedTask {
   id: string
   title: string
+  /** Unique assigned worker label, visible in TODO. */
+  owner: string
   role: TaskRole
   prompt: string
   dependsOn: string[]
   readOnly: boolean
   writeScopes: string[]
-  /** Context tier selected by the parent orchestrator. */
-  contextBudget?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536 | 81920 | 98304
+  /** Whole-token context tier selected by the parent orchestrator. */
+  contextBudget?: number
   /** Reserved output tokens used during admission. */
   outputReserveTokens?: number
   /** Additional safety reserve used during admission. */
@@ -57,7 +61,7 @@ export interface TaskPackage {
 export interface WorkerNeed {
   kind: 'NEED_FILE' | 'NEED_HISTORY' | 'NEED_MORE_CONTEXT' | 'NEED_DEPENDENCY' | 'NEED_BUDGET' | 'NEED_TOOL_RESULT' | 'NEED_MORE_TOOL' | 'NEED_REVIEW'
   reason: string
-  requestedContextTokens?: 8192 | 16384 | 24576 | 32768 | 49152 | 65536 | 81920 | 98304
+  requestedContextTokens?: number
 }
 
 /** Durable state snapshot for one logical task. */
@@ -65,6 +69,9 @@ export interface TaskState {
   taskId: string
   state: 'CREATED' | 'QUEUED' | 'ACTIVE' | 'WAITING' | 'DONE' | 'FAILED' | 'CANCELLED' | 'PARKED'
   attempts: number
+  owner: string
+  reason: string
+  childId?: SessionId
 }
 
 /** The strict result expected from the planning agent. */
