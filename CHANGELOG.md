@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Apply saved orchestrator model and reasoning when a new Web Session starts, show the selection in the chat, and preserve a manual change made before the first response.
+
 ## 1.2.0 — 2026-09-30
 
 - Save independent provider/model/reasoning assignments for orchestrator, workers and final reviewer in Settings.

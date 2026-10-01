@@ -48,6 +48,28 @@ describe('saved role model assignments', () => {
     expect(next).toHaveBeenCalledTimes(5)
   })
 
+  it('shows the saved model and reasoning in a new Web Session without overriding a later manual choice', async () => {
+    let activeSelection: Record<string, unknown> | undefined
+    const handlers = new Map<string, Function>(), selectModel = vi.fn(async (selection: Record<string, unknown>) => {
+      activeSelection = selection
+      return { selection }
+    })
+    const ctx = { on: (name: string, handler: Function) => { handlers.set(name, handler) }, get: () => ({ selectModel }), effect: vi.fn() }
+    const configured = resolveRoleModels({ orchestratorProvider: 'local', orchestratorModel: 'main', orchestratorReasoningEffort: 'high' })
+    installParentModelPolicy(ctx as never, () => configured)
+    const agent = { id: SessionId('new-web-session'), session: Session.create(SessionId('new-web-session')) }
+
+    await handlers.get('agent/created')!({ agent, source: 'startup' })
+    expect(selectModel).toHaveBeenCalledTimes(1)
+    expect(selectModel).toHaveBeenLastCalledWith({ sessionId: agent.id, provider: 'local', model: 'main', reasoningEffort: 'high' })
+
+    await selectModel({ sessionId: agent.id, provider: 'manual', model: 'picked' })
+
+    await handlers.get('system-prompt/assemble')!({}, { agent }, vi.fn(async () => ({ variables: {} })))
+    expect(selectModel).toHaveBeenCalledTimes(2)
+    expect(activeSelection).toEqual({ sessionId: agent.id, provider: 'manual', model: 'picked' })
+  })
+
   it('stops before assembly when the native selector rejects an unavailable saved model', async () => {
     const handlers = new Map<string, Function>(), next = vi.fn()
     const ctx = { on: (name: string, handler: Function) => { handlers.set(name, handler) }, get: () => ({ selectModel: async () => { throw new Error('model unavailable') } }) }

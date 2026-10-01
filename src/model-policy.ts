@@ -84,14 +84,30 @@ export function resolveChildModels(configured: RoleModels, inherited: ModelSelec
 
 /** Apply saved parent defaults through the native Session selector or the headless selector.
  * The Web selector owns its durable notice and pending-selection projection.
- * A saved assignment is applied to a new parent and when those settings change;
- * subsequent explicit chat selections remain available. Children are excluded.
+ * A saved assignment seeds new Web Sessions before they are exposed, then applies
+ * when those settings change. Later explicit chat selections remain available.
+ * Children are excluded.
  * @param ctx - plugin context owning listener lifetimes.
  * @param read - current configured assignments.
  */
 export function installParentModelPolicy(ctx: Context, read: () => RoleModels): void {
   const states = new WeakMap<Agent, { key?: string; selection?: ModelSelectionRef; dispose?: () => unknown }>()
   ctx.on('agent/disposed', ({ agent }) => { states.get(agent)?.dispose?.(); states.delete(agent) })
+  ctx.on('agent/created', async ({ agent, source }) => {
+    if (source !== 'startup' || agent.session.header.origin === 'subagent') return
+    const selected = read().orchestrator
+    if (selected === undefined) return
+    const controller = ctx.get('sessionController')
+    if (controller === undefined) return
+    try {
+      await controller.selectModel({ sessionId: agent.id, ...selected })
+      const state = states.get(agent) ?? {}
+      state.key = JSON.stringify(selected)
+      states.set(agent, state)
+    } catch (error) {
+      ctx.logger.warn(`task-orchestrator: could not apply saved parent model to new Session: ${String(error)}`)
+    }
+  })
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const agent = context.agent
     if (agent === undefined || agent.session.header.origin === 'subagent') return next()
