@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { InputHTMLAttributes, ButtonHTMLAttributes } from 'react'
 import { ContextSettingsPage } from '../src/client/ContextSettingsPage.tsx'
+import { inject as clientInject } from '../src/client/index.tsx'
 import { SettingsNotice, SettingsNotices } from '../src/client/SettingsNotice.tsx'
 import { readSettings, saveSettings, settingsError, type TaskOrchestratorSettings } from '../src/client/settings-model.ts'
 import { en, zh } from '../src/client/locales.ts'
@@ -49,6 +50,10 @@ function fixture(options: { writable?: boolean; refusal?: boolean; failure?: boo
 }
 
 describe('profile-backed orchestration settings', () => {
+  it('injects the Session Remote used to load the model catalog', () => {
+    expect(clientInject).toContain('remote.session')
+  })
+
   it('saves edited fields together and displays the accepted Host values', async () => {
     const f = fixture()
     render(<ContextSettingsPage {...f.props} />)

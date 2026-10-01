@@ -23,7 +23,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Client services required by the Settings section and its form. */
-export const inject = ['slots', 'locale', 'configForms', 'remote']
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
 /**
  * Register the Settings navigation entry while this plugin is enabled.
